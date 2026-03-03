@@ -78,6 +78,11 @@ export default function SkillsConfig() {
   const [quickPickSource, setQuickPickSource] = useState<(typeof COMMUNITY_SOURCES)[0] | null>(null);
   const [quickPickAgent, setQuickPickAgent] = useState('');
 
+  // 拖拽复制状态
+  const [draggingSkill, setDraggingSkill] = useState<{ sourceAgentId: string; skillName: string; skillDescription: string } | null>(null);
+  const [dropTargetAgentId, setDropTargetAgentId] = useState<string | null>(null);
+  const [copyingSkill, setCopyingSkill] = useState<string | null>(null);
+
   useEffect(() => {
     loadAgentConfig();
   }, [loadAgentConfig]);
@@ -208,6 +213,72 @@ export default function SkillsConfig() {
     }
   };
 
+  // ── 拖拽复制处理 ──
+  const handleDragStart = (e: React.DragEvent, agentId: string, skillName: string, skillDescription: string) => {
+    e.dataTransfer.setData('application/json', JSON.stringify({ sourceAgentId: agentId, skillName, skillDescription }));
+    e.dataTransfer.effectAllowed = 'copy';
+    setDraggingSkill({ sourceAgentId: agentId, skillName, skillDescription });
+  };
+
+  const handleDragEnd = () => {
+    setDraggingSkill(null);
+    setDropTargetAgentId(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent, agentId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    // 只有当拖拽目标不是源 agent 时才高亮
+    if (draggingSkill && draggingSkill.sourceAgentId !== agentId) {
+      setDropTargetAgentId(agentId);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDropTargetAgentId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetAgentId: string, targetAgentLabel: string) => {
+    e.preventDefault();
+    setDropTargetAgentId(null);
+
+    if (!draggingSkill) return;
+    if (!agentConfig?.agents) return;
+
+    const { sourceAgentId, skillName, skillDescription } = draggingSkill;
+
+    // 关键校验 1: 同 agent 内禁用
+    if (sourceAgentId === targetAgentId) {
+      toast('❌ 不能复制给同一个 Agent', 'err');
+      setDraggingSkill(null);
+      return;
+    }
+
+    // 关键校验 2: 检查目标 agent 是否已拥有该 skill
+    const targetAgent = agentConfig.agents.find((ag) => ag.id === targetAgentId);
+    if (targetAgent?.skills?.some((sk) => sk.name === skillName)) {
+      toast(`⚠️ ${targetAgentLabel} 已拥有技能 ${skillName}`, 'err');
+      setDraggingSkill(null);
+      return;
+    }
+
+    // 执行复制
+    setCopyingSkill(skillName);
+    try {
+      const r = await api.addSkill(targetAgentId, skillName, skillDescription, '');
+      if (r.ok) {
+        toast(`✅ ${skillName} 已复制给 ${targetAgentLabel}`, 'ok');
+        loadAgentConfig();
+      } else {
+        toast(r.error || '复制失败', 'err');
+      }
+    } catch {
+      toast('服务器连接失败', 'err');
+    }
+    setCopyingSkill(null);
+    setDraggingSkill(null);
+  };
+
   if (!agentConfig?.agents) {
     return <div className="empty">无法加载</div>;
   }
@@ -216,31 +287,62 @@ export default function SkillsConfig() {
   const localPanel = (
     <div>
       <div className="skills-grid">
-        {agentConfig.agents.map((ag) => (
-          <div className="sk-card" key={ag.id}>
-            <div className="sk-hdr">
-              <span className="sk-emoji">{ag.emoji || '🏛️'}</span>
-              <span className="sk-name">{ag.label}</span>
-              <span className="sk-cnt">{(ag.skills || []).length} 技能</span>
+        {agentConfig.agents.map((ag) => {
+          const isDropTarget = dropTargetAgentId === ag.id;
+          return (
+            <div
+              className="sk-card"
+              key={ag.id}
+              onDragOver={(e) => handleDragOver(e, ag.id)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, ag.id, ag.label)}
+              style={{
+                transition: 'all .2s',
+                borderColor: isDropTarget ? 'var(--acc)' : undefined,
+                boxShadow: isDropTarget ? '0 0 0 2px var(--acc)' : undefined,
+                opacity: draggingSkill && draggingSkill.sourceAgentId === ag.id ? 0.7 : 1,
+              }}
+            >
+              <div className="sk-hdr">
+                <span className="sk-emoji">{ag.emoji || '🏛️'}</span>
+                <span className="sk-name">{ag.label}</span>
+                <span className="sk-cnt">{(ag.skills || []).length} 技能</span>
+              </div>
+              <div className="sk-list">
+                {!(ag.skills || []).length ? (
+                  <div className="sk-empty">暂无 Skills</div>
+                ) : (
+                  (ag.skills || []).map((sk) => {
+                    const isCopying = copyingSkill === sk.name;
+                    const isDraggingSource = draggingSkill?.skillName === sk.name && draggingSkill?.sourceAgentId === ag.id;
+                    return (
+                      <div
+                        className="sk-item"
+                        key={sk.name}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, ag.id, sk.name, sk.description || '')}
+                        onDragEnd={handleDragEnd}
+                        onClick={() => openSkill(ag.id, sk.name)}
+                        style={{
+                          cursor: 'grab',
+                          opacity: isCopying ? 0.5 : isDraggingSource ? 0.4 : 1,
+                          transition: 'opacity .2s',
+                        }}
+                      >
+                        <span className="si-name">📦 {sk.name}</span>
+                        <span className="si-desc">{sk.description || '无描述'}</span>
+                        <span className="si-arrow">›</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <div className="sk-add" onClick={() => openAddForm(ag.id, ag.label)}>
+                ＋ 添加技能
+              </div>
             </div>
-            <div className="sk-list">
-              {!(ag.skills || []).length ? (
-                <div className="sk-empty">暂无 Skills</div>
-              ) : (
-                (ag.skills || []).map((sk) => (
-                  <div className="sk-item" key={sk.name} onClick={() => openSkill(ag.id, sk.name)}>
-                    <span className="si-name">📦 {sk.name}</span>
-                    <span className="si-desc">{sk.description || '无描述'}</span>
-                    <span className="si-arrow">›</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="sk-add" onClick={() => openAddForm(ag.id, ag.label)}>
-              ＋ 添加技能
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
