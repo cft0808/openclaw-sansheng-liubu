@@ -7,7 +7,22 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-test:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell lint
+        run: |
+          find scripts -name '*.sh' | while read f; do
+            echo "Checking $f"
+            bash -n "$f"
+          done
+
+      - name: Check install script
+        run: bash -n install.sh
+
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -15,9 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: 'pip'
 
       - name: Syntax check (py_compile)
         run: |
@@ -32,5 +49,19 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
-      - name: Shell lint (bash -n)
-        run: bash -n scripts/run_loop.sh
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: edict:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
