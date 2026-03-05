@@ -34,3 +34,5 @@ edict/.env
 # Backups
 *.bak*
 data
+backups/
+deliverables/
