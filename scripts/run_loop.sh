@@ -56,6 +56,15 @@ while true; do
   python3 "$SCRIPT_DIR/sync_officials_stats.py"       >> "$LOG" 2>&1 || true
   python3 "$SCRIPT_DIR/refresh_live_data.py"          >> "$LOG" 2>&1 || true
 
+  # 太子通讯督办：确保关键任务每20分钟至少回报一次（写入看板 progress）。
+  # 注意：这里只对少数旗舰任务启用，避免刷屏。
+  python3 "$SCRIPT_DIR/taizi_20min_ping.py" --task JJC-20260305-002 --max-minutes 20 \
+    --now "强制20分钟同步：正在督办RouteA vNext交付与验收" \
+    --plan "收集各部回填🔄|催办未回填项🔄|汇总回奏皇上" >> "$LOG" 2>&1 || true
+  python3 "$SCRIPT_DIR/taizi_20min_ping.py" --task JJC-20260305-003 --max-minutes 20 \
+    --now "强制20分钟同步：正在复盘同步失效根因并落地机制" \
+    --plan "收集事实与时间线🔄|定位根因与对策🔄|落地机制并验收" >> "$LOG" 2>&1 || true
+
   # 定期巡检：检测卡住的任务并自动重试
   SCAN_COUNTER=$((SCAN_COUNTER + INTERVAL))
   if (( SCAN_COUNTER >= SCAN_INTERVAL )); then
