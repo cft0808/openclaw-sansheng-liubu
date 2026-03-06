@@ -24,6 +24,8 @@ warn()  { echo -e "${YELLOW}⚠️  $1${NC}"; }
 error() { echo -e "${RED}❌ $1${NC}"; }
 info()  { echo -e "${BLUE}ℹ️  $1${NC}"; }
 
+AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+
 # ── Step 0: 依赖检查 ──────────────────────────────────────────
 check_deps() {
   info "检查依赖..."
@@ -91,8 +93,7 @@ backup_existing() {
 # ── Step 1: 创建 Workspace ──────────────────────────────────
 create_workspaces() {
   info "创建 Agent Workspace..."
-  
-  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+
   for agent in "${AGENTS[@]}"; do
     ws="$OC_HOME/workspace-$agent"
     mkdir -p "$ws/skills"
@@ -118,6 +119,46 @@ create_workspaces() {
 4. 涉及删除/外发动作必须明确标注并等待批准。
 AGENTS_EOF
   done
+}
+
+# ── Step 1.5: 统一 data 软链到仓库 data 目录 ───────────────────
+link_workspace_data() {
+  info "为 Agent Workspace 建立 data 软链..."
+
+  local target_data="$REPO_DIR/data"
+  local target_real
+  target_real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$target_data")"
+
+  local has_workspace=false
+  for ws in "$OC_HOME"/workspace-*; do
+    [ -d "$ws" ] || continue
+    has_workspace=true
+
+    local ws_data="$ws/data"
+    local ws_name
+    ws_name="$(basename "$ws")"
+
+    if [ -L "$ws_data" ]; then
+      local current_real
+      current_real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$ws_data")"
+      if [ "$current_real" = "$target_real" ]; then
+        log "$ws_name: data 软链已正确指向 $target_data"
+        continue
+      fi
+      mv "$ws_data" "$ws_data.bak.$(date +%Y%m%d-%H%M%S)"
+      warn "$ws_name: 旧 data 软链已备份，重新建立指向 $target_data"
+    elif [ -e "$ws_data" ]; then
+      mv "$ws_data" "$ws_data.bak.$(date +%Y%m%d-%H%M%S)"
+      warn "$ws_name: 旧 data 目录/文件已备份，重新建立软链"
+    fi
+
+    ln -s "$target_data" "$ws_data"
+    log "$ws_name: data -> $target_data"
+  done
+
+  if ! $has_workspace; then
+    warn "未检测到 workspace-* 目录，跳过 data 软链建立"
+  fi
 }
 
 # ── Step 2: 注册 Agents ─────────────────────────────────────
@@ -277,6 +318,7 @@ backup_existing
 create_workspaces
 register_agents
 init_data
+link_workspace_data
 build_frontend
 first_sync
 restart_gateway
