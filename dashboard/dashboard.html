@@ -889,7 +889,7 @@ function restoreGlobalScanState(){
   globalScanCheckedAt = String(raw.checkedAt || '');
   globalScanCount = Number(raw.count || globalScanActions.length || 0);
   if(st){
-    const at = globalScanCheckedAt.replace('T',' ').substring(11,19);
+      const at = fmtActivityTime(globalScanCheckedAt);
     const count = globalScanCount;
     st.textContent = count || at ? `最近巡检: ${count} 个动作${at ? ' · ' + at : ''}` : '未巡检';
   }
@@ -1105,7 +1105,7 @@ function renderAgentsStatus(data){
         <span><span class="as-dot idle" style="position:static;width:8px;height:8px"></span> ${idle} 待命</span>
         ${offline?`<span><span class="as-dot offline" style="position:static;width:8px;height:8px"></span> ${offline} 离线</span>`:''}
         ${unconf?`<span><span class="as-dot unconfigured" style="position:static;width:8px;height:8px"></span> ${unconf} 未配置</span>`:''}
-        <span style="margin-left:auto;font-size:10px;color:var(--muted)">检测于 ${(data.checkedAt||'').substring(11,19)}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--muted)">检测于 ${fmtActivityTime(data.checkedAt||'')}</span>
       </div>
     </div>`;
 }
@@ -1703,16 +1703,48 @@ function renderLiveActivity(data){
   }
 }
 
-function fmtActivityTime(ts){
-  if(!ts)return '';
+function parseDateFlexible(ts){
+  if(ts===null||ts===undefined||ts==='') return null;
+  if(ts instanceof Date) return isNaN(ts.getTime())?null:ts;
+
   if(typeof ts==='number'){
-    const d=new Date(ts);
-    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+    // 兼容秒级与毫秒级时间戳
+    const ms = ts > 1e12 ? ts : ts * 1000;
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? null : d;
   }
-  if(typeof ts==='string'&&ts.length>=19){
-    return ts.substring(11,19);
+
+  if(typeof ts!=='string') return null;
+  const s = ts.trim();
+  if(!s) return null;
+
+  if(/^\d+$/.test(s)){
+    const n = Number(s);
+    if(Number.isFinite(n)){
+      const ms = n > 1e12 ? n : n * 1000;
+      const d = new Date(ms);
+      return isNaN(d.getTime()) ? null : d;
+    }
   }
-  return String(ts).substring(0,8);
+
+  // "YYYY-MM-DD HH:mm:ss" 视为本地时间（历史数据兼容）
+  const localMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if(localMatch){
+    const [, y, m, d, h, mi, se] = localMatch;
+    const dt = new Date(Number(y), Number(m)-1, Number(d), Number(h), Number(mi), Number(se));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+
+  // ISO 8601（含 Z / +08:00）走浏览器标准解析，自动换算到本地显示
+  const iso = s.includes(' ') ? s.replace(' ', 'T') : s;
+  const parsed = new Date(iso);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function fmtActivityTime(ts){
+  const d = parseDateFlexible(ts);
+  if(!d) return '';
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
 }
 
 /* ══ MODEL CONFIG ══ */
@@ -2101,7 +2133,7 @@ function openSessionDetail(jsonStr){
         const kLabel = kind==='assistant'?'回复':kind==='tool'?'工具':kind==='user'?'用户':'事件';
         let txt = (a.text||'').replace(/\[\[.*?\]\]/g,'').replace(/\*\*/g,'').trim();
         if(txt.length>200) txt=txt.substring(0,200)+'…';
-        const time = (a.at||'').substring(11,19);
+        const time = fmtActivityTime(a.at);
         return `<div style="padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px;line-height:1.5">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
             <span>${kIcon}</span>
@@ -2134,7 +2166,8 @@ function extractAgent(t){
 function timeAgo(iso){
   if(!iso) return '';
   try{
-    const d = new Date(iso.includes('T')?iso:iso.replace(' ','T')+'Z');
+    const d = parseDateFlexible(iso);
+    if(!d) return '';
     if(isNaN(d.getTime())) return '';
     const diff = Date.now() - d.getTime();
     const mins = Math.floor(diff/60000);
@@ -2628,7 +2661,7 @@ async function runGlobalSchedulerScan(){
     const r = await postJ(API + '/scheduler-scan', {thresholdSec: 180});
     if(r.ok){
       const count = r.count || 0;
-      const at = (r.checkedAt || '').replace('T',' ').substring(11,19);
+      const at = fmtActivityTime(r.checkedAt || '');
       globalScanActions = Array.isArray(r.actions) ? r.actions : [];
       globalScanCheckedAt = String(r.checkedAt || '');
       globalScanCount = Number(count || 0);
