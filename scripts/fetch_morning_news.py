@@ -94,7 +94,9 @@ def parse_rss(xml_text):
             enc = item.find('enclosure')
             if enc is not None and 'image' in (enc.get('type') or ''):
                 img = enc.get('url', '')
-            media = item.find('media:thumbnail', ns) or item.find('media:content', ns)
+            media = item.find('media:thumbnail', ns)
+            if media is None:
+                media = item.find('media:content', ns)
             if media is not None:
                 img = media.get('url', img)
             items.append({'title': title, 'desc': desc, 'link': link,
