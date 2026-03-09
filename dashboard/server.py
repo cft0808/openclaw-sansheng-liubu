@@ -60,7 +60,7 @@ _MIME_TYPES = {
 
 def read_json(path, default=None):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding='utf-8-sig'))
     except Exception:
         return default if default is not None else {}
 
