@@ -224,7 +224,7 @@ def main():
                 scan_files += 1
 
                 try:
-                    raw = json.loads(sessions_file.read_text())
+                    raw = json.loads(sessions_file.read_text(encoding='utf-8-sig'))
                 except Exception:
                     continue
 
@@ -240,7 +240,7 @@ def main():
         mc_tasks_file = DATA / 'mission_control_tasks.json'
         if mc_tasks_file.exists():
             try:
-                mc_tasks = json.loads(mc_tasks_file.read_text())
+                mc_tasks = json.loads(mc_tasks_file.read_text(encoding='utf-8-sig'))
                 if isinstance(mc_tasks, list):
                     tasks.extend(mc_tasks)
             except Exception:
@@ -250,7 +250,7 @@ def main():
         manual_tasks_file = DATA / 'manual_parallel_tasks.json'
         if manual_tasks_file.exists():
             try:
-                manual_tasks = json.loads(manual_tasks_file.read_text())
+                manual_tasks = json.loads(manual_tasks_file.read_text(encoding='utf-8-sig'))
                 if isinstance(manual_tasks, list):
                     tasks.extend(manual_tasks)
             except Exception:
@@ -295,7 +295,7 @@ def main():
             # 除非它是 Blocked (报错)，或者是今天新建的
             state = t.get('state')
             # state_from_session: < 2min = Doing, < 60min = Review, else = Next
-            if state not in ('Doing', 'Blocked'):
+            if state not in ('Doing', 'Review', 'Blocked'):
                 # 如果不是正在进行或报错，就隐藏掉
                 # 特例: 如果是 mission control (mc-) 的心跳，可能也没必要显示，除非 Doing
                 continue
@@ -310,7 +310,7 @@ def main():
         existing_tasks_file = DATA / 'tasks_source.json'
         if existing_tasks_file.exists():
             try:
-                existing = json.loads(existing_tasks_file.read_text())
+                existing = json.loads(existing_tasks_file.read_text(encoding='utf-8-sig'))
                 jjc_existing = [t for t in existing if str(t.get('id', '')).startswith('JJC')]
                 
                 # 去掉 tasks 里已有的 JJC（以防重复），再把旨意放到最前面
