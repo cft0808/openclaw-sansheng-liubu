@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-import json, pathlib, datetime, logging
+import json
+import pathlib
+import datetime
+import logging
 from file_lock import atomic_json_write, atomic_json_read
 from utils import read_json
 
@@ -18,11 +21,29 @@ def output_meta(path):
     return {"exists": True, "lastModified": ts}
 
 
+def clean_text(value):
+    if not isinstance(value, str):
+        return value
+    t = value.replace('\ufeff', '').replace('\x00', '')
+    # 常见残留乱码
+    t = t.replace('锟斤拷', '�').replace('宸叉帴鏃', '已接旨')
+    t = ''.join(ch for ch in t if ch >= ' ' or ch in '\n\t')
+    return t.strip()
+
+
+def clean_obj(obj):
+    if isinstance(obj, dict):
+        return {k: clean_obj(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean_obj(v) for v in obj]
+    if isinstance(obj, str):
+        return clean_text(obj)
+    return obj
+
+
 def main():
-    # 使用 officials_stats.json（与 sync_officials_stats.py 统一）
     officials_data = read_json(DATA / 'officials_stats.json', {})
     officials = officials_data.get('officials', []) if isinstance(officials_data, dict) else officials_data
-    # 任务源优先：tasks_source.json（可对接外部系统同步写入）
     tasks = atomic_json_read(DATA / 'tasks_source.json', [])
     if not tasks:
         tasks = read_json(DATA / 'tasks.json', [])
@@ -40,7 +61,6 @@ def main():
         t['org'] = t.get('org') or org_map.get(t.get('official', ''), '')
         t['outputMeta'] = output_meta(t.get('output', ''))
 
-        # 心跳时效检测：对 Doing/Assigned 状态的任务标注活跃度
         if t.get('state') in ('Doing', 'Assigned', 'Review'):
             updated_raw = t.get('updatedAt') or t.get('sourceMeta', {}).get('updatedAt')
             age_sec = None
@@ -54,28 +74,29 @@ def main():
                 except Exception:
                     pass
             if age_sec is None:
-                t['heartbeat'] = {'status': 'unknown', 'label': '⚪ 未知', 'ageSec': None}
+                t['heartbeat'] = {'status': 'unknown', 'label': '? 未知', 'ageSec': None}
             elif age_sec < 180:
                 t['heartbeat'] = {'status': 'active', 'label': f'🟢 活跃 {int(age_sec//60)}分钟前', 'ageSec': int(age_sec)}
             elif age_sec < 600:
-                t['heartbeat'] = {'status': 'warn', 'label': f'🟡 可能停滞 {int(age_sec//60)}分钟前', 'ageSec': int(age_sec)}
+                t['heartbeat'] = {'status': 'warn', 'label': f'🟡 停滞 {int(age_sec//60)}分钟前', 'ageSec': int(age_sec)}
             else:
-                t['heartbeat'] = {'status': 'stalled', 'label': f'🔴 已停滞 {int(age_sec//60)}分钟', 'ageSec': int(age_sec)}
+                t['heartbeat'] = {'status': 'stalled', 'label': f'🔴 停滞 {int(age_sec//60)}分钟', 'ageSec': int(age_sec)}
         else:
             t['heartbeat'] = None
 
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-    def _is_today_done(t):
-        if t.get('state') != 'Done':
+
+    def _is_today_done(task):
+        if task.get('state') != 'Done':
             return False
-        ua = t.get('updatedAt', '')
+        ua = task.get('updatedAt', '')
         if isinstance(ua, str) and ua[:10] == today_str:
             return True
-        # fallback: outputMeta lastModified
-        lm = t.get('outputMeta', {}).get('lastModified', '')
+        lm = task.get('outputMeta', {}).get('lastModified', '')
         if isinstance(lm, str) and lm[:10] == today_str:
             return True
         return False
+
     today_done = sum(1 for t in tasks if _is_today_done(t))
     total_done = sum(1 for t in tasks if t.get('state') == 'Done')
     in_progress = sum(1 for t in tasks if t.get('state') in ['Doing', 'Review', 'Next', 'Blocked'])
@@ -90,15 +111,15 @@ def main():
                 'official': t.get('official'),
                 'task': t.get('title'),
                 'out': t.get('output'),
-                'qa': '通过' if t.get('outputMeta', {}).get('exists') else '待补成果'
+                'qa': '通过' if t.get('outputMeta', {}).get('exists') else '未生成成果'
             })
 
     payload = {
         'generatedAt': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'taskSource': 'tasks_source.json' if (DATA / 'tasks_source.json').exists() else 'tasks.json',
         'officials': officials,
-        'tasks': tasks,
-        'history': history,
+        'tasks': clean_obj(tasks),
+        'history': clean_obj(history),
         'metrics': {
             'officialCount': len(officials),
             'todayDone': today_done,
@@ -106,7 +127,7 @@ def main():
             'inProgress': in_progress,
             'blocked': blocked
         },
-        'syncStatus': sync_status,
+        'syncStatus': clean_obj(sync_status),
         'health': {
             'syncOk': bool(sync_status.get('ok', False)),
             'syncLatencyMs': sync_status.get('durationMs'),
