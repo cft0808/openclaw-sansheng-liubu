@@ -24,6 +24,12 @@
 """
 import json, pathlib, datetime, sys, subprocess, logging, os, re
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+
 _BASE = pathlib.Path(__file__).resolve().parent.parent
 TASKS_FILE = _BASE / 'data' / 'tasks_source.json'
 REFRESH_SCRIPT = _BASE / 'scripts' / 'refresh_live_data.py'
