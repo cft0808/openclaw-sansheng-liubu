@@ -1259,6 +1259,17 @@ def _collect_message_text(msg):
     return ''.join(parts)
 
 
+
+
+def _clean_garbled_text(text):
+    """尽量清洗常见乱码与不可显示字符，避免前端出现大面积锟斤拷。"""
+    if not isinstance(text, str):
+        return ''
+    t = text.replace('\ufeff', '').replace('\x00', '')
+    if '锟斤拷' in t:
+        t = t.replace('锟斤拷', '�')
+    t = ''.join(ch for ch in t if ch >= ' ' or ch in '\n\t')
+    return t.strip()
 def _parse_activity_entry(item):
     """将 session jsonl 的 message 统一解析成看板活动条目。"""
     msg = item.get('message') or {}
@@ -1271,9 +1282,9 @@ def _parse_activity_entry(item):
         tool_calls = []
         for c in msg.get('content', []) or []:
             if c.get('type') == 'text' and c.get('text') and not text:
-                text = str(c.get('text', '')).strip()
+                text = _clean_garbled_text(str(c.get('text', '')).strip())
             elif c.get('type') == 'thinking' and c.get('thinking') and not thinking:
-                thinking = str(c.get('thinking', '')).strip()[:200]
+                thinking = _clean_garbled_text(str(c.get('thinking', '')).strip())[:200]
             elif c.get('type') == 'tool_use':
                 tool_calls.append({
                     'name': c.get('name', ''),
@@ -1298,13 +1309,13 @@ def _parse_activity_entry(item):
         output = ''
         for c in msg.get('content', []) or []:
             if c.get('type') == 'text' and c.get('text'):
-                output = str(c.get('text', '')).strip()[:200]
+                output = _clean_garbled_text(str(c.get('text', '')).strip())[:200]
                 break
         if not output:
             for key in ('output', 'stdout', 'stderr', 'message'):
                 val = details.get(key)
                 if isinstance(val, str) and val.strip():
-                    output = val.strip()[:200]
+                    output = _clean_garbled_text(val.strip())[:200]
                     break
 
         entry = {
@@ -1323,7 +1334,7 @@ def _parse_activity_entry(item):
         text = ''
         for c in msg.get('content', []) or []:
             if c.get('type') == 'text' and c.get('text'):
-                text = str(c.get('text', '')).strip()
+                text = _clean_garbled_text(str(c.get('text', '')).strip())
                 break
         if not text:
             return None
@@ -1351,7 +1362,7 @@ def get_agent_activity(agent_id, limit=30, task_id=None):
 
     for session_file in files_to_scan:
         try:
-            lines = session_file.read_text(errors='ignore').splitlines()
+            lines = session_file.read_text(encoding='utf-8', errors='replace').splitlines()
         except Exception:
             continue
 
@@ -1417,7 +1428,7 @@ def get_agent_activity_by_keywords(agent_id, keywords, limit=20):
     target_file = None
     for sf in jsonl_files[:5]:
         try:
-            content = sf.read_text(errors='ignore')
+            content = sf.read_text(encoding='utf-8', errors='replace')
         except Exception:
             continue
         hits = sum(1 for kw in keywords if kw.lower() in content.lower())
