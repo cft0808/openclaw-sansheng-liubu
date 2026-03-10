@@ -288,7 +288,7 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo "下一步："
 echo "  1. 启动数据刷新循环:  bash scripts/run_loop.sh &"
-echo "  2. 启动看板服务器:    python3 dashboard/server.py"
+echo "  2. 启动看板服务器:    python3 \"$REPO_DIR/dashboard/server.py\""
 echo "  3. 打开看板:          http://127.0.0.1:7891"
 echo ""
 info "文档: docs/getting-started.md"
