@@ -26,6 +26,34 @@
 
 ---
 
+## 🔄 2026-03-13 稳定性改造补充（控制层）
+
+为解决重复派发、Doing 阶段误升级、执行产出与状态提交脱节等问题，调度层新增以下硬约束：
+
+1. **单写提交入口（commit gate）**  
+   - 主状态、`_scheduler.controlState`、调度关键字段写入统一走 `commit_state_change()`。  
+   - 提交时校验 `owner_run_id + state_version + action whitelist`。  
+   - 版本冲突或 owner 过期仅记录诊断事件，不覆盖已有状态。
+
+2. **任务阶段租约锁（lease lock）**  
+   - 维度：`task_id + stage + executor_role`。  
+   - 字段：`ownerRunId/acquiredAt/heartbeatAt/ttlSec`。  
+   - 未持锁流程禁止派发与提交；TTL 超时可接管，防止死锁。
+
+3. **状态动作白名单**  
+   - `Doing/WritebackPending/WaitingDecision` 禁止自动改派与自动升级。  
+   - 自动调度在每个 decision tick 内仅允许一个动作生效。
+
+4. **写回闭环分层**  
+   - 执行输出与状态提交分离：`ExecutionOutputReady` / `WritebackPending`。  
+   - 仅 writeback 成功才算状态前进；提交失败进入提交重试链路。
+
+5. **事件分层与可观测指标**  
+   - 事件分为 `flow/progress/diagnostic`，并增加 `reason_code`。  
+   - 核心指标：调度放大比、无效控制比、写回脱节时长。
+
+---
+
 ## 📚 第一部分：业务架构
 
 ### 1.1 帝国制度：分权制衡的设计哲学
