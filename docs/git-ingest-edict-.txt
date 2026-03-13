@@ -1,0 +1,785 @@
+Directory structure:
+└── cft0808-edict/
+    ├── docker-compose.yml
+    ├── .dockerignore
+    ├── docker/
+    │   └── demo_data/
+    │       ├── last_model_change_result.json
+    │       ├── model_change_log.json
+    │       └── pending_model_changes.json
+    ├── edict/
+    │   ├── alembic.ini
+    │   ├── Dockerfile
+    │   ├── .env.example
+    │   ├── backend/
+    │   │   ├── requirements.txt
+    │   │   └── app/
+    │   │       ├── __init__.py
+    │   │       ├── api/
+    │   │       │   └── __init__.py
+    │   │       ├── models/
+    │   │       │   └── __init__.py
+    │   │       ├── services/
+    │   │       │   └── __init__.py
+    │   │       └── workers/
+    │   │           └── __init__.py
+    │   ├── frontend/
+    │   │   ├── Dockerfile
+    │   │   ├── index.html
+    │   │   ├── nginx.conf
+    │   │   ├── package.json
+    │   │   ├── postcss.config.js
+    │   │   ├── tailwind.config.js
+    │   │   ├── tsconfig.json
+    │   │   ├── tsconfig.tsbuildinfo
+    │   │   ├── vite.config.ts
+    │   │   ├── .env.development
+    │   │   └── src/
+    │   │       ├── main.tsx
+    │   │       ├── vite-env.d.ts
+    │   │       └── components/
+    │   │           └── Toaster.tsx
+    │   └── migration/
+    │       └── script.py.mako
+    ├── examples/
+    │   └── README.md
+    ├── .github/
+    │   ├── pull_request_template.md
+    │   ├── ISSUE_TEMPLATE/
+    │   │   ├── bug_report.md
+    │   │   └── feature_request.md
+    │   └── workflows/
+    │       └── ci.yml
+    └── .vite/
+        └── deps/
+            ├── _metadata.json
+            └── package.json
+
+================================================
+FILE: docker-compose.yml
+================================================
+version: '3.8'
+
+services:
+  sansheng-demo:
+    image: cft0808/sansheng-demo:latest
+    platform: linux/amd64
+    ports:
+      - "7891:7891"
+    environment:
+      - DEMO_MODE=true
+    restart: unless-stopped
+
+# 启动: docker compose up
+# 如果在 ARM Mac (M1/M2/M3) 上运行，删除 platform 行即可
+# 访问: http://localhost:7891
+
+
+
+================================================
+FILE: .dockerignore
+================================================
+# Git
+.git
+.gitignore
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+.venv
+venv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (not needed in image)
+docs/
+*.md
+!README.md
+LICENSE
+
+
+
+================================================
+FILE: docker/demo_data/last_model_change_result.json
+================================================
+{}
+
+
+
+================================================
+FILE: docker/demo_data/model_change_log.json
+================================================
+[]
+
+
+
+================================================
+FILE: docker/demo_data/pending_model_changes.json
+================================================
+[]
+
+
+
+================================================
+FILE: edict/alembic.ini
+================================================
+[alembic]
+script_location = migration
+sqlalchemy.url = postgresql+asyncpg://edict:edict_dev_2024@localhost:5432/edict
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+
+
+
+================================================
+FILE: edict/Dockerfile
+================================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY edict/backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# 复制后端代码
+COPY edict/backend/ /app/
+
+# 复制 Alembic 配置
+COPY edict/alembic.ini /app/alembic.ini
+COPY edict/migration/ /app/migration/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+
+================================================
+FILE: edict/.env.example
+================================================
+# ── Edict 三省六部 事件驱动架构 ──
+# 复制为 .env 并根据环境修改
+
+# ── Postgres ──
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=edict
+POSTGRES_USER=edict
+POSTGRES_PASSWORD=edict_secret_change_me
+
+# ── Redis ──
+REDIS_URL=redis://localhost:6379/0
+
+# ── Backend ──
+BACKEND_HOST=0.0.0.0
+BACKEND_PORT=8000
+SECRET_KEY=change-me-in-production
+DEBUG=true
+
+# ── OpenClaw Gateway ──
+OPENCLAW_GATEWAY_URL=http://localhost:18789
+OPENCLAW_BIN=openclaw
+
+# ── 文件路径（兼容旧系统过渡期） ──
+LEGACY_DATA_DIR=../data
+LEGACY_TASKS_FILE=../data/tasks_source.json
+
+# ── 调度参数 ──
+STALL_THRESHOLD_SEC=180
+MAX_DISPATCH_RETRY=3
+DISPATCH_TIMEOUT_SEC=300
+HEARTBEAT_INTERVAL_SEC=30
+
+# ── 飞书通知 ──
+FEISHU_DELIVER=true
+FEISHU_CHANNEL=feishu
+
+
+
+================================================
+FILE: edict/backend/requirements.txt
+================================================
+# Edict Backend Dependencies
+fastapi[standard]>=0.115.0
+uvicorn[standard]>=0.32.0
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+alembic>=1.14.0
+redis[hiredis]>=5.2.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.1
+httpx>=0.28.0
+
+
+
+================================================
+FILE: edict/backend/app/__init__.py
+================================================
+"""Edict Backend — 三省六部事件驱动架构。"""
+
+
+
+================================================
+FILE: edict/backend/app/api/__init__.py
+================================================
+from .tasks import router as tasks_router
+from .agents import router as agents_router
+from .events import router as events_router
+from .admin import router as admin_router
+from .websocket import router as websocket_router
+
+__all__ = [
+    "tasks_router",
+    "agents_router",
+    "events_router",
+    "admin_router",
+    "websocket_router",
+]
+
+
+
+================================================
+FILE: edict/backend/app/models/__init__.py
+================================================
+"""Edict 数据模型包。"""
+
+from .task import Task, TaskState
+from .event import Event
+from .thought import Thought
+from .todo import Todo
+
+__all__ = ["Task", "TaskState", "Event", "Thought", "Todo"]
+
+
+
+================================================
+FILE: edict/backend/app/services/__init__.py
+================================================
+from .event_bus import EventBus, get_event_bus
+from .task_service import TaskService
+
+__all__ = ["EventBus", "get_event_bus", "TaskService"]
+
+
+
+================================================
+FILE: edict/backend/app/workers/__init__.py
+================================================
+from .orchestrator_worker import OrchestratorWorker, run_orchestrator
+from .dispatch_worker import DispatchWorker, run_dispatcher
+
+__all__ = [
+    "OrchestratorWorker",
+    "run_orchestrator",
+    "DispatchWorker",
+    "run_dispatcher",
+]
+
+
+
+================================================
+FILE: edict/frontend/Dockerfile
+================================================
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 3000
+CMD ["nginx", "-g", "daemon off;"]
+
+
+
+================================================
+FILE: edict/frontend/index.html
+================================================
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>三省六部 · Edict Dashboard</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+
+
+================================================
+FILE: edict/frontend/nginx.conf
+================================================
+server {
+    listen 3000;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://backend:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /ws {
+        proxy_pass http://backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400;
+    }
+}
+
+
+
+================================================
+FILE: edict/frontend/package.json
+================================================
+{
+  "name": "edict-dashboard",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.5",
+    "lucide-react": "^0.460.0",
+    "clsx": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.1"
+  }
+}
+
+
+
+================================================
+FILE: edict/frontend/postcss.config.js
+================================================
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+
+
+================================================
+FILE: edict/frontend/tailwind.config.js
+================================================
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        // 三省六部主题色
+        imperial: {
+          50: '#fef7ed',
+          100: '#fdecd4',
+          200: '#fad5a8',
+          300: '#f7b671',
+          400: '#f38d38',
+          500: '#f07012',
+          600: '#e15808',
+          700: '#bb4009',
+          800: '#95330f',
+          900: '#792c10',
+        },
+        dynasty: {
+          50: '#fdf4f3',
+          100: '#fce8e4',
+          200: '#fad4ce',
+          300: '#f5b5ab',
+          400: '#ee8a7a',
+          500: '#e25f4d',
+          600: '#cf4430',
+          700: '#ae3624',
+          800: '#903022',
+          900: '#782d23',
+        },
+      },
+    },
+  },
+  plugins: [],
+}
+
+
+
+================================================
+FILE: edict/frontend/tsconfig.json
+================================================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"]
+}
+
+
+
+================================================
+FILE: edict/frontend/tsconfig.tsbuildinfo
+================================================
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/store.ts","./src/vite-env.d.ts","./src/components/confirmdialog.tsx","./src/components/courtceremony.tsx","./src/components/edictboard.tsx","./src/components/memorialpanel.tsx","./src/components/modelconfig.tsx","./src/components/monitorpanel.tsx","./src/components/morningpanel.tsx","./src/components/officialpanel.tsx","./src/components/sessionspanel.tsx","./src/components/skillsconfig.tsx","./src/components/taskmodal.tsx","./src/components/templatepanel.tsx","./src/components/toaster.tsx"],"version":"5.9.3"}
+
+
+================================================
+FILE: edict/frontend/vite.config.ts
+================================================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+  },
+  build: {
+    outDir: path.resolve(__dirname, '../../dashboard/dist'),
+    emptyOutDir: true,
+  },
+})
+
+
+
+================================================
+FILE: edict/frontend/.env.development
+================================================
+VITE_API_URL=http://127.0.0.1:7891
+
+
+
+================================================
+FILE: edict/frontend/src/main.tsx
+================================================
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
+
+
+
+================================================
+FILE: edict/frontend/src/vite-env.d.ts
+================================================
+/// <reference types="vite/client" />
+
+
+
+================================================
+FILE: edict/frontend/src/components/Toaster.tsx
+================================================
+import { useStore } from '../store';
+
+export default function Toaster() {
+  const toasts = useStore((s) => s.toasts);
+  if (!toasts.length) return null;
+
+  return (
+    <div className="toaster">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast ${t.type}`}>
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+
+================================================
+FILE: edict/migration/script.py.mako
+================================================
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+${imports if imports else ""}
+
+# revision identifiers
+revision: str = ${repr(up_revision)}
+down_revision: Union[str, None] = ${repr(down_revision)}
+branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
+depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
+
+
+def upgrade() -> None:
+    ${upgrades if upgrades else "pass"}
+
+
+def downgrade() -> None:
+    ${downgrades if downgrades else "pass"}
+
+
+
+================================================
+FILE: examples/README.md
+================================================
+# 📂 案例 / Examples
+
+真实的端到端使用案例，展示三省六部处理完整旨意的全流程。
+
+| # | 案例 | 旨意内容 | 涉及部门 | 复杂度 |
+|---|------|---------|----------|--------|
+| 1 | [竞品分析](competitive-analysis.md) | "分析 CrewAI vs AutoGen vs LangGraph" | 中书→门下→户部+兵部+礼部 | ⭐⭐⭐ |
+| 2 | [代码审查](code-review.md) | "审查 FastAPI 代码的安全性" | 中书→门下→兵部+刑部 | ⭐⭐ |
+| 3 | [周报生成](weekly-report.md) | "生成本周工程团队周报" | 中书→门下→户部+礼部 | ⭐⭐ |
+
+每个案例包含：
+- 📜 **圣旨**：原始指令
+- 📋 **中书省规划**：任务拆解方案
+- 🔍 **门下省审议**：审核意见（含封驳/返工记录）
+- ⚔️ **各部执行结果**：每个部门的产出摘要
+- 📮 **最终奏折**：尚书省汇总的完整报告
+
+> 💡 这些案例基于真实运行记录整理，任务 ID 和时间戳已脱敏。
+
+
+
+================================================
+FILE: .github/pull_request_template.md
+================================================
+## 变更描述
+<!-- 简要描述此 PR 的目的和变更内容 -->
+
+## 变更类型
+- [ ] Bug 修复
+- [ ] 新功能
+- [ ] 重构 / 代码优化
+- [ ] 文档更新
+- [ ] CI / 工程配置
+
+## 检查清单
+- [ ] 代码已通过 `python3 -m py_compile` 检查
+- [ ] 已在本地测试运行 `run_loop.sh`
+- [ ] 涉及看板的变更已在浏览器中验证
+- [ ] 更新了相关文档（如适用）
+
+## 关联 Issue
+<!-- 如 Fixes #123 -->
+
+
+
+================================================
+FILE: .github/ISSUE_TEMPLATE/bug_report.md
+================================================
+---
+name: Bug Report
+about: 报告一个 Bug
+labels: bug
+---
+
+## 环境
+- OpenClaw 版本：
+- 操作系统：
+- Python 版本：
+
+## 问题描述
+
+## 复现步骤
+1. 
+2. 
+3. 
+
+## 期望行为
+
+## 实际行为
+
+## 错误日志
+```
+粘贴日志
+```
+
+
+
+================================================
+FILE: .github/ISSUE_TEMPLATE/feature_request.md
+================================================
+---
+name: Feature Request
+about: 提交功能建议
+labels: enhancement
+---
+
+## 功能描述
+
+## 使用场景
+
+## 期望效果
+
+## 其他信息
+
+
+
+================================================
+FILE: .github/workflows/ci.yml
+================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Syntax check (py_compile)
+        run: |
+          find scripts dashboard -name '*.py' | while read f; do
+            echo "  checking $f"
+            python3 -m py_compile "$f"
+          done
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Shell lint (bash -n)
+        run: bash -n scripts/run_loop.sh
+
+
+
+================================================
+FILE: .vite/deps/_metadata.json
+================================================
+{
+  "hash": "2321d508",
+  "configHash": "3e6eab4b",
+  "lockfileHash": "e3b0c442",
+  "browserHash": "5408e294",
+  "optimized": {},
+  "chunks": {}
+}
+
+
+================================================
+FILE: .vite/deps/package.json
+================================================
+{
+  "type": "module"
+}
+
+
