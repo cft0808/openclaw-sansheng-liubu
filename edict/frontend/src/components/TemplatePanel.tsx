@@ -30,6 +30,7 @@ export default function TemplatePanel() {
   const [discussSessionId, setDiscussSessionId] = useState('');
   const [discussLoading, setDiscussLoading] = useState(false);
   const [discussResult, setDiscussResult] = useState<CourtDiscussResult | null>(null);
+  const [discussWindowOpen, setDiscussWindowOpen] = useState(false);
 
   let tpls = TEMPLATES;
   if (tplCatFilter !== '全部') tpls = tpls.filter((t) => t.cat === tplCatFilter);
@@ -143,6 +144,7 @@ export default function TemplatePanel() {
       setDiscussResult(r);
       setDiscussSessionId(r.sessionId || '');
       if (r.ok) {
+        setDiscussWindowOpen(true);
         toast('🧠 首轮议政完成，请皇上拍板继续或结束', 'ok');
       } else {
         toast(r.error || '议政失败', 'err');
@@ -151,6 +153,19 @@ export default function TemplatePanel() {
       toast('⚠️ 服务器连接失败', 'err');
     } finally {
       setDiscussLoading(false);
+    }
+  };
+
+  const refreshCourtDiscussStatus = async () => {
+    if (!discussSessionId) return;
+    try {
+      const r = await api.courtDiscuss({
+        action: 'status',
+        sessionId: discussSessionId,
+      });
+      setDiscussResult(r);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -219,32 +234,54 @@ export default function TemplatePanel() {
     toast('已填入自由下旨区，请确认后下旨', 'ok');
   };
 
-  const issueDiscussEdictNow = async () => {
-    const final = discussResult?.final;
-    const title = final?.recommended_edict?.trim();
-    if (!title) {
-      toast('没有可下达的旨意草案', 'err');
+  const handoffCourtDiscuss = async () => {
+    if (!discussSessionId) {
+      toast('请先开始议政', 'err');
       return;
     }
-    if (!(await ensureGatewayReady())) return;
-    if (!confirm(`确认将议政结论直接下旨？\n\n${title.substring(0, 200)}${title.length > 200 ? '…' : ''}`)) return;
+    if (!confirm('确认将议政结论交由太子办理？')) return;
+    setDiscussLoading(true);
     try {
-      const r = await api.createTask({
-        title,
-        org: '中书省',
-        targetDept: final?.recommended_target_dept || '',
-        priority: final?.recommended_priority || 'normal',
-        templateId: 'court-discuss',
-        params: { source: 'court-discuss' },
+      const r = await api.courtDiscuss({
+        action: 'handoff',
+        sessionId: discussSessionId,
       });
+      setDiscussResult(r);
       if (r.ok) {
-        toast(`📜 ${r.taskId} 旨意已下达`, 'ok');
+        toast(`📜 已交由太子办理：${r.linkedTaskId || '已创建任务'}`, 'ok');
         loadAll();
       } else {
-        toast(r.error || '下旨失败', 'err');
+        toast(r.error || '交办失败', 'err');
       }
     } catch {
       toast('⚠️ 服务器连接失败', 'err');
+    } finally {
+      setDiscussLoading(false);
+    }
+  };
+
+  const terminateCourtDiscuss = async () => {
+    if (!discussSessionId) {
+      toast('请先开始议政', 'err');
+      return;
+    }
+    if (!confirm('确认终止该话题，不进入办理流程？')) return;
+    setDiscussLoading(true);
+    try {
+      const r = await api.courtDiscuss({
+        action: 'terminate',
+        sessionId: discussSessionId,
+      });
+      setDiscussResult(r);
+      if (r.ok) {
+        toast('🛑 话题已终止', 'ok');
+      } else {
+        toast(r.error || '终止失败', 'err');
+      }
+    } catch {
+      toast('⚠️ 服务器连接失败', 'err');
+    } finally {
+      setDiscussLoading(false);
     }
   };
 
@@ -352,124 +389,35 @@ export default function TemplatePanel() {
               fontSize: 12,
             }}
           >
-            {!discussResult.ok && (
-              <div style={{ color: 'var(--danger)', marginBottom: 8 }}>
-                ⚠️ {discussResult.error || '议政失败'}
-              </div>
-            )}
-            {discussResult.final && (
-              <>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                  {discussResult.final.ready_for_edict ? '✅ 结论：可下旨' : '🟡 结论：建议先澄清'}
-                </div>
-                {discussResult.final.clarified_goal && (
-                  <div style={{ color: 'var(--muted)', marginBottom: 8 }}>
-                    目标澄清：{discussResult.final.clarified_goal}
-                  </div>
-                )}
-                {discussResult.final.risks?.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>主要风险</div>
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {discussResult.final.risks.slice(0, 4).map((x, i) => (
-                        <li key={i}>{String(x)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {discussResult.final.questions_to_emperor?.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>待皇上确认</div>
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {discussResult.final.questions_to_emperor.slice(0, 4).map((x, i) => (
-                        <li key={i}>{String(x)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                <div
-                  style={{
-                    background: 'var(--panel2)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 8,
-                    padding: 10,
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: 1.55,
-                    marginBottom: 10,
-                  }}
-                >
-                  {discussResult.final.recommended_edict || '（暂无旨意草案）'}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" className="btn btn-g" onClick={adoptDiscussEdict}>
-                    📥 采用到下旨框
-                  </button>
-                  <button type="button" className="tpl-go" onClick={issueDiscussEdictNow}>
-                    📜 直接下旨
-                  </button>
-                </div>
-              </>
-            )}
-            {!discussResult.final && discussResult.assessment && (
-              <div
-                style={{
-                  background: 'var(--panel2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 8,
-                  padding: 10,
-                  marginBottom: 10,
+            <div style={{ marginBottom: 8 }}>
+              当前状态：
+              <strong style={{ marginLeft: 6 }}>
+                {discussResult.status === 'handoffed'
+                  ? '已交办太子'
+                  : discussResult.status === 'terminated'
+                  ? '已终止'
+                  : discussResult.status === 'done'
+                  ? '讨论已结束'
+                  : '讨论进行中'}
+              </strong>
+              {typeof discussResult.rounds === 'number' && <span style={{ marginLeft: 10 }}>轮次：{discussResult.rounds}</span>}
+            </div>
+            {discussResult.message && <div style={{ color: 'var(--muted)', marginBottom: 8 }}>{discussResult.message}</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-g"
+                onClick={() => {
+                  setDiscussWindowOpen(true);
+                  refreshCourtDiscussStatus();
                 }}
               >
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                  {discussResult.assessment.moderatorLabel} 本轮建议：
-                  {discussResult.assessment.recommend_stop ? '请皇上决定是否结束讨论' : '建议继续下一轮讨论'}
-                </div>
-                {discussResult.assessment.reason && (
-                  <div style={{ color: 'var(--muted)', marginBottom: 6 }}>
-                    原因：{discussResult.assessment.reason}
-                  </div>
-                )}
-                {discussResult.assessment.question_to_emperor && (
-                  <div style={{ marginBottom: 8 }}>
-                    请皇上拍板：{discussResult.assessment.question_to_emperor}
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" className="btn btn-g" onClick={continueCourtDiscuss} disabled={discussLoading}>
-                    皇上：继续讨论一轮
-                  </button>
-                  <button type="button" className="tpl-go" onClick={finalizeCourtDiscuss} disabled={discussLoading}>
-                    皇上：同意结束讨论
-                  </button>
-                </div>
-              </div>
-            )}
-            {discussResult.discussion && discussResult.discussion.length > 0 && (
-              <details style={{ marginTop: 10 }}>
-                <summary style={{ cursor: 'pointer', color: 'var(--muted)' }}>
-                  查看讨论详情（{discussResult.discussion.length} 条）
-                </summary>
-                <div style={{ marginTop: 8, maxHeight: 260, overflow: 'auto' }}>
-                  {discussResult.discussion.map((x, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        border: '1px solid var(--line)',
-                        borderRadius: 8,
-                        padding: 8,
-                        marginBottom: 8,
-                        background: 'var(--panel2)',
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        第{x.round}轮 · {x.agentLabel}
-                      </div>
-                      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{x.reply}</div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
+                🪟 打开议政窗口
+              </button>
+              <button type="button" className="tpl-go" onClick={refreshCourtDiscussStatus}>
+                刷新状态
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -559,6 +507,186 @@ export default function TemplatePanel() {
           </div>
         ))}
       </div>
+
+      {/* Court Discuss Window */}
+      {discussWindowOpen && (
+        <div className="modal-bg open" onClick={() => setDiscussWindowOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setDiscussWindowOpen(false)}>✕</button>
+            <div className="modal-body">
+              <div style={{ fontSize: 11, color: 'var(--acc)', fontWeight: 700, letterSpacing: '.04em', marginBottom: 4 }}>
+                御前议政窗口
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>🪟 轮番议政 · 皇上拍板</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                当前会话：{discussSessionId || '未开始'} {discussResult?.status ? `| 状态：${discussResult.status}` : ''}
+              </div>
+
+              {discussResult?.topic && (
+                <div
+                  style={{
+                    background: 'var(--panel2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 8,
+                    padding: 10,
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.55,
+                    marginBottom: 10,
+                  }}
+                >
+                  议题：{discussResult.topic}
+                </div>
+              )}
+
+              {discussResult?.assessment && !discussResult?.final && (
+                <div
+                  style={{
+                    background: 'var(--panel2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 8,
+                    padding: 10,
+                    marginBottom: 10,
+                    fontSize: 12,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                    {discussResult.assessment.moderatorLabel} 本轮建议：
+                    {discussResult.assessment.recommend_stop ? '可结束讨论' : '建议继续讨论'}
+                  </div>
+                  {discussResult.assessment.reason && (
+                    <div style={{ color: 'var(--muted)', marginBottom: 4 }}>原因：{discussResult.assessment.reason}</div>
+                  )}
+                  {discussResult.assessment.question_to_emperor && (
+                    <div>请皇上拍板：{discussResult.assessment.question_to_emperor}</div>
+                  )}
+                </div>
+              )}
+
+              {discussResult?.final && (
+                <div
+                  style={{
+                    background: 'var(--panel2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 8,
+                    padding: 10,
+                    marginBottom: 10,
+                    fontSize: 12,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                    {discussResult.final.ready_for_edict ? '✅ 已形成办理结论' : '🟡 结论暂不建议办理'}
+                  </div>
+                  {discussResult.final.clarified_goal && (
+                    <div style={{ color: 'var(--muted)', marginBottom: 6 }}>
+                      目标澄清：{discussResult.final.clarified_goal}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      background: 'var(--panel)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 8,
+                      padding: 8,
+                      whiteSpace: 'pre-wrap',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {discussResult.final.recommended_edict || '（暂无草案）'}
+                  </div>
+                </div>
+              )}
+
+              {discussResult?.linkedTaskId && (
+                <div style={{ fontSize: 12, color: 'var(--acc)', marginBottom: 10 }}>
+                  已交由太子办理：{discussResult.linkedTaskId}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                <button type="button" className="btn btn-g" onClick={refreshCourtDiscussStatus} disabled={discussLoading}>
+                  刷新
+                </button>
+                {discussResult?.status === 'ongoing' && (
+                  <>
+                    <button type="button" className="btn btn-g" onClick={continueCourtDiscuss} disabled={discussLoading}>
+                      继续一轮
+                    </button>
+                    <button type="button" className="tpl-go" onClick={finalizeCourtDiscuss} disabled={discussLoading}>
+                      结束并形成结论
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-g"
+                      style={{ borderColor: '#ff7d7d', color: '#ff7d7d' }}
+                      onClick={terminateCourtDiscuss}
+                      disabled={discussLoading}
+                    >
+                      终止话题
+                    </button>
+                  </>
+                )}
+                {discussResult?.status === 'done' && !discussResult?.linkedTaskId && (
+                  <>
+                    <button type="button" className="btn btn-g" onClick={adoptDiscussEdict}>
+                      采用到自由下旨
+                    </button>
+                    {discussResult?.final?.ready_for_edict ? (
+                      <button type="button" className="tpl-go" onClick={handoffCourtDiscuss} disabled={discussLoading}>
+                        交由太子办理
+                      </button>
+                    ) : (
+                      <button type="button" className="tpl-go" disabled title="结论未达到可办理状态">
+                        当前不宜办理
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-g"
+                      style={{ borderColor: '#ff7d7d', color: '#ff7d7d' }}
+                      onClick={terminateCourtDiscuss}
+                      disabled={discussLoading}
+                    >
+                      终止话题
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div
+                style={{
+                  border: '1px solid var(--line)',
+                  borderRadius: 8,
+                  maxHeight: 360,
+                  overflow: 'auto',
+                  padding: 10,
+                  background: 'var(--panel2)',
+                }}
+              >
+                {(discussResult?.discussion || []).length === 0 && (
+                  <div style={{ color: 'var(--muted)', fontSize: 12 }}>暂无讨论记录</div>
+                )}
+                {(discussResult?.discussion || []).map((x, i) => (
+                  <div
+                    key={`${x.round}-${x.agentId}-${i}`}
+                    style={{
+                      border: '1px solid var(--line)',
+                      borderRadius: 8,
+                      padding: 8,
+                      marginBottom: 8,
+                      background: 'var(--panel)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      第{x.round}轮 · 第{x.turn || '?'}位/{x.totalTurns || '?'} · {x.agentLabel}
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, fontSize: 12 }}>{x.reply}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Template Form Modal */}
       {formTpl && (

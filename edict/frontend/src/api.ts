@@ -488,7 +488,7 @@ export interface CreateTaskPayload {
 }
 
 export interface CourtDiscussPayload {
-  action: 'start' | 'next' | 'finalize' | 'status';
+  action: 'start' | 'next' | 'finalize' | 'status' | 'handoff' | 'terminate';
   topic?: string;
   participants?: string[];
   sessionId?: string;
@@ -497,6 +497,8 @@ export interface CourtDiscussPayload {
 
 export interface CourtDiscussEntry {
   round: number;
+  turn?: number;
+  totalTurns?: number;
   agentId: string;
   agentLabel: string;
   reply: string;
@@ -529,13 +531,14 @@ export interface CourtDiscussAssessment {
 
 export interface CourtDiscussResult extends ActionResult {
   sessionId?: string;
-  status?: 'ongoing' | 'done';
+  status?: 'ongoing' | 'done' | 'handoffed' | 'terminated';
   topic?: string;
   participants?: string[];
   rounds?: number;
   moderator?: { id: string; label: string };
   assessment?: CourtDiscussAssessment;
-  suggestedAction?: 'next' | 'finalize';
+  suggestedAction?: 'next' | 'finalize' | 'terminate';
+  linkedTaskId?: string;
   discussion?: CourtDiscussEntry[];
   partial?: CourtDiscussEntry[];
   final?: CourtDiscussFinal;
