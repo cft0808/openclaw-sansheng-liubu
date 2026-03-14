@@ -109,3 +109,35 @@ def test_court_discuss_handoff_to_taizi(tmp_path, monkeypatch):
     assert handoff['ok'] is True
     assert handoff['status'] == 'handoffed'
     assert handoff['linkedTaskId'] == 'JJC-TEST-COURT-001'
+
+
+def test_court_round_degrades_on_agent_schema_error(tmp_path, monkeypatch):
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    srv.DATA = data_dir
+
+    session = {
+        'id': 'CD-TEST-001',
+        'topic': '讨论调度改造是否应先收口提交边界再扩展自动化',
+        'participants': ['taizi', 'zhongshu', 'menxia'],
+        'moderatorId': 'menxia',
+        'status': 'ongoing',
+        'rounds': 0,
+        'discussion': [],
+        'assessments': [],
+        'emperorNotes': [{'at': srv.now_iso(), 'text': '请重点关注模型兼容风险'}],
+    }
+
+    def _mock_agent(aid, message, timeout_sec=120):
+        if aid == 'menxia':
+            raise RuntimeError(
+                'HTTP 400: Invalid JSON payload received. Unknown name "patternProperties"'
+            )
+        return f'{aid} 正常发言'
+
+    monkeypatch.setattr(srv, '_run_agent_sync', _mock_agent)
+
+    round_entries, assessment = srv._run_court_round(session)
+    assert len(round_entries) == 3
+    assert any(bool(x.get('error')) for x in round_entries)
+    assert assessment.get('reason')

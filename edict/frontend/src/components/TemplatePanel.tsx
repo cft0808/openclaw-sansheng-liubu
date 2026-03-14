@@ -31,6 +31,7 @@ export default function TemplatePanel() {
   const [discussLoading, setDiscussLoading] = useState(false);
   const [discussResult, setDiscussResult] = useState<CourtDiscussResult | null>(null);
   const [discussWindowOpen, setDiscussWindowOpen] = useState(false);
+  const [emperorNote, setEmperorNote] = useState('');
 
   let tpls = TEMPLATES;
   if (tplCatFilter !== '全部') tpls = tpls.filter((t) => t.cat === tplCatFilter);
@@ -132,6 +133,7 @@ export default function TemplatePanel() {
     }
     if (!(await ensureGatewayReady())) return;
     if (!confirm(`开始御前议政？\n\n议题：${topic.substring(0, 120)}${topic.length > 120 ? '…' : ''}`)) return;
+    setDiscussWindowOpen(true);
     setDiscussLoading(true);
     setDiscussSessionId('');
     setDiscussResult(null);
@@ -140,11 +142,11 @@ export default function TemplatePanel() {
         action: 'start',
         topic,
         participants: discussParticipants,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
       setDiscussSessionId(r.sessionId || '');
       if (r.ok) {
-        setDiscussWindowOpen(true);
         toast('🧠 首轮议政完成，请皇上拍板继续或结束', 'ok');
       } else {
         toast(r.error || '议政失败', 'err');
@@ -162,6 +164,7 @@ export default function TemplatePanel() {
       const r = await api.courtDiscuss({
         action: 'status',
         sessionId: discussSessionId,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
     } catch {
@@ -179,6 +182,7 @@ export default function TemplatePanel() {
       const r = await api.courtDiscuss({
         action: 'next',
         sessionId: discussSessionId,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
       if (r.ok) {
@@ -204,6 +208,7 @@ export default function TemplatePanel() {
       const r = await api.courtDiscuss({
         action: 'finalize',
         sessionId: discussSessionId,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
       if (r.ok) {
@@ -245,6 +250,7 @@ export default function TemplatePanel() {
       const r = await api.courtDiscuss({
         action: 'handoff',
         sessionId: discussSessionId,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
       if (r.ok) {
@@ -271,6 +277,7 @@ export default function TemplatePanel() {
       const r = await api.courtDiscuss({
         action: 'terminate',
         sessionId: discussSessionId,
+        emperorNote: emperorNote.trim(),
       });
       setDiscussResult(r);
       if (r.ok) {
@@ -521,6 +528,29 @@ export default function TemplatePanel() {
               <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                 当前会话：{discussSessionId || '未开始'} {discussResult?.status ? `| 状态：${discussResult.status}` : ''}
               </div>
+              {discussLoading && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+                  ⏳ 议政处理中，请稍候…
+                </div>
+              )}
+
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>皇上批示（可选）</div>
+                <textarea
+                  className="tpl-input"
+                  style={{ minHeight: 56, resize: 'vertical' }}
+                  placeholder="例如：请重点评估风险和可执行边界，给出是否应交办太子的明确结论。"
+                  value={emperorNote}
+                  onChange={(e) => setEmperorNote(e.target.value)}
+                  disabled={discussLoading}
+                />
+              </div>
+
+              {(discussResult?.emperorNotes || []).length > 0 && (
+                <div style={{ marginBottom: 10, fontSize: 12, color: 'var(--muted)' }}>
+                  最近批示：{(discussResult?.emperorNotes || []).slice(-1)[0]?.text}
+                </div>
+              )}
 
               {discussResult?.topic && (
                 <div
@@ -669,15 +699,16 @@ export default function TemplatePanel() {
                   <div
                     key={`${x.round}-${x.agentId}-${i}`}
                     style={{
-                      border: '1px solid var(--line)',
+                      border: x.error ? '1px solid #ff7d7d66' : '1px solid var(--line)',
                       borderRadius: 8,
                       padding: 8,
                       marginBottom: 8,
-                      background: 'var(--panel)',
+                      background: x.error ? '#ff7d7d12' : 'var(--panel)',
                     }}
                   >
                     <div style={{ fontWeight: 700, marginBottom: 4 }}>
                       第{x.round}轮 · 第{x.turn || '?'}位/{x.totalTurns || '?'} · {x.agentLabel}
+                      {x.error && <span style={{ marginLeft: 8, color: '#ff7d7d' }}>（发言降级）</span>}
                     </div>
                     <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, fontSize: 12 }}>{x.reply}</div>
                   </div>

@@ -979,6 +979,28 @@ def _pick_moderator(selected):
     return selected[0]
 
 
+def _friendly_agent_error(err_text):
+    text = (err_text or '').strip()
+    if 'patternProperties' in text and 'Invalid JSON payload' in text:
+        return (
+            '模型工具协议不兼容（patternProperties）。'
+            '建议切换该大臣模型，或先排除此大臣后继续议政。'
+        )
+    if not text:
+        return '未知错误'
+    return text[:240]
+
+
+def _append_emperor_note(session, note):
+    n = (note or '').strip()
+    if not n:
+        return
+    notes = session.setdefault('emperorNotes', [])
+    notes.append({'at': now_iso(), 'text': n[:600]})
+    if len(notes) > 30:
+        session['emperorNotes'] = notes[-30:]
+
+
 def _build_court_response(session, message=''):
     assessment = None
     assessments = session.get('assessments') or []
@@ -998,6 +1020,7 @@ def _build_court_response(session, message=''):
         'assessment': assessment,
         'suggestedAction': session.get('suggestedAction', 'next'),
         'linkedTaskId': session.get('linkedTaskId', ''),
+        'emperorNotes': session.get('emperorNotes', [])[-10:],
         'discussion': (session.get('discussion') or [])[-80:],
         'final': session.get('final'),
         'message': message or session.get('message', ''),
@@ -1010,6 +1033,8 @@ def _run_court_round(session):
     round_no = int(session.get('rounds') or 0) + 1
     transcript = session.setdefault('discussion', [])
     round_entries = []
+    emperor_notes = session.get('emperorNotes') or []
+    latest_note = emperor_notes[-1].get('text', '') if emperor_notes else ''
 
     for idx, aid in enumerate(selected):
         label = _agent_label(aid)
@@ -1023,13 +1048,23 @@ def _run_court_round(session):
             f'议题：{topic}\n'
             f'当前第 {round_no} 轮，你是本轮第 {idx + 1}/{len(selected)} 位发言。\n\n'
             f'最近讨论摘要：\n{recent_text}\n\n'
+            f'皇上最新批示：{latest_note or "暂无"}\n\n'
             f'请输出四段（中文、简洁）：\n'
             f'【你认为最关键的澄清点】\n'
             f'【你看到的主要风险】\n'
             f'【你建议皇上现在做的决定】\n'
             f'【可直接执行的修改建议】'
         )
-        reply = _run_agent_sync(aid, prompt, timeout_sec=120)
+        reply = ''
+        error_text = ''
+        try:
+            reply = _run_agent_sync(aid, prompt, timeout_sec=120)
+        except Exception as e:
+            error_text = _friendly_agent_error(str(e))
+            reply = (
+                f'【系统降级】{label} 本轮发言失败：{error_text}\n'
+                f'【建议】请皇上选择“继续一轮”或调整参与大臣后再议。'
+            )
         round_entries.append({
             'round': round_no,
             'turn': idx + 1,
@@ -1037,6 +1072,7 @@ def _run_court_round(session):
             'agentId': aid,
             'agentLabel': label,
             'reply': reply[:4000],
+            'error': bool(error_text),
             'at': now_iso(),
         })
 
@@ -1062,8 +1098,22 @@ def _run_court_round(session):
         f'  "draft_direction": "若现在结束，旨意草案应强调什么"\n'
         f'}}'
     )
-    assess_raw = _run_agent_sync(moderator_id, assess_prompt, timeout_sec=120)
-    assess = _extract_json_obj(assess_raw) or {}
+    assess_raw = ''
+    assess = {}
+    try:
+        assess_raw = _run_agent_sync(moderator_id, assess_prompt, timeout_sec=120)
+        assess = _extract_json_obj(assess_raw) or {}
+    except Exception as e:
+        err_msg = _friendly_agent_error(str(e))
+        has_error_entry = any(bool(x.get('error')) for x in round_entries)
+        assess = {
+            'recommend_stop': bool(has_error_entry),
+            'reason': f'主持评估降级：{err_msg}',
+            'question_to_emperor': '是否继续下一轮讨论，或直接终止该话题？',
+            'focus_next_round': ['先排查失败大臣模型兼容性', '收敛为可执行目标'],
+            'draft_direction': '若无共识建议先终止，若有可执行路径则交由太子办理',
+        }
+        assess_raw = str(e)[:2000]
     assessment = {
         'round': round_no,
         'moderatorId': moderator_id,
@@ -1102,10 +1152,13 @@ def _finalize_court_session(session, force=False):
         f'第{a.get("round")}轮建议: {a.get("reason", "")}'
         for a in (session.get('assessments') or [])[-6:]
     ])
+    emperor_notes = session.get('emperorNotes') or []
+    emperor_pack = '\n'.join([f'- {(x.get("text") or "")[:200]}' for x in emperor_notes[-6:]]) or '暂无'
     synth_prompt = (
         f'请作为太子秘书处，基于御前讨论输出最终可执行结论。\n'
         f'议题：{topic}\n'
         f'主持审议摘要：\n{assess_pack or "暂无"}\n\n'
+        f'皇上批示：\n{emperor_pack}\n\n'
         f'讨论记录：\n{discuss_pack}\n\n'
         f'请只输出 JSON（不要代码块）：\n'
         f'{{\n'
@@ -1118,8 +1171,24 @@ def _finalize_court_session(session, force=False):
         f'  "recommended_priority": "normal"\n'
         f'}}'
     )
-    synth_raw = _run_agent_sync(moderator_id, synth_prompt, timeout_sec=120)
-    synth = _extract_json_obj(synth_raw) or {}
+    synth_raw = ''
+    synth = {}
+    try:
+        synth_raw = _run_agent_sync(moderator_id, synth_prompt, timeout_sec=120)
+        synth = _extract_json_obj(synth_raw) or {}
+    except Exception as e:
+        err_msg = _friendly_agent_error(str(e))
+        synth_raw = str(e)[:4000]
+        has_error_entry = any(bool(x.get('error')) for x in transcript[-24:])
+        synth = {
+            'ready_for_edict': False if has_error_entry else True,
+            'clarified_goal': topic[:80],
+            'risks': [f'总结阶段降级：{err_msg}'],
+            'questions_to_emperor': ['是否允许在降级结论下交由太子办理？'],
+            'recommended_edict': f'请太子先组织可行性评估：{topic}',
+            'recommended_target_dept': '中书省',
+            'recommended_priority': 'normal',
+        }
     final = {
         'ready_for_edict': bool(synth.get('ready_for_edict', False)),
         'clarified_goal': str(synth.get('clarified_goal') or '').strip(),
@@ -1147,7 +1216,8 @@ def _finalize_court_session(session, force=False):
     return {'ok': True, 'final': final}
 
 
-def handle_court_discuss(action='start', topic='', participants=None, session_id='', force=False):
+def handle_court_discuss(action='start', topic='', participants=None, session_id='', force=False, emperor_note=''):
+    # emperor_note 用于皇上在每轮拍板前补充要求
     action = (action or 'start').strip().lower()
     if action in ('start', 'next', 'finalize', 'handoff') and not _check_gateway_alive():
         return {'ok': False, 'error': 'Gateway 未启动，请先运行 openclaw gateway start'}
@@ -1183,10 +1253,12 @@ def handle_court_discuss(action='start', topic='', participants=None, session_id
             'discussion': [],
             'assessments': [],
             'final': None,
+            'emperorNotes': [],
             'createdAt': now_iso(),
             'updatedAt': now_iso(),
             'message': '议政会话已创建',
         }
+        _append_emperor_note(session, emperor_note)
         try:
             _run_court_round(session)
         except Exception as e:
@@ -1199,8 +1271,11 @@ def handle_court_discuss(action='start', topic='', participants=None, session_id
     session = _load_court_session(session_id)
     if not session:
         return {'ok': False, 'error': f'讨论会话 {session_id} 不存在'}
+    _append_emperor_note(session, emperor_note)
 
     if action == 'status':
+        session['updatedAt'] = now_iso()
+        _upsert_court_session(session)
         return _build_court_response(session, '会话状态已返回')
 
     if action == 'next':
@@ -4421,13 +4496,21 @@ class Handler(BaseHTTPRequestHandler):
             participants = body.get('participants', [])
             session_id = body.get('sessionId', '').strip()
             force = bool(body.get('force', False))
+            emperor_note = body.get('emperorNote', '').strip()
             if action == 'start' and not topic:
                 self.send_json({'ok': False, 'error': 'topic required'}, 400)
                 return
             if action in ('next', 'status', 'finalize', 'handoff', 'terminate') and not session_id:
                 self.send_json({'ok': False, 'error': 'sessionId required'}, 400)
                 return
-            result = handle_court_discuss(action=action, topic=topic, participants=participants, session_id=session_id, force=force)
+            result = handle_court_discuss(
+                action=action,
+                topic=topic,
+                participants=participants,
+                session_id=session_id,
+                force=force,
+                emperor_note=emperor_note,
+            )
             self.send_json(result)
             return
 

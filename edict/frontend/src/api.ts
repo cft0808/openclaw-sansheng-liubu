@@ -493,6 +493,7 @@ export interface CourtDiscussPayload {
   participants?: string[];
   sessionId?: string;
   force?: boolean;
+  emperorNote?: string;
 }
 
 export interface CourtDiscussEntry {
@@ -502,6 +503,7 @@ export interface CourtDiscussEntry {
   agentId: string;
   agentLabel: string;
   reply: string;
+  error?: boolean;
   at: string;
 }
 
@@ -539,6 +541,7 @@ export interface CourtDiscussResult extends ActionResult {
   assessment?: CourtDiscussAssessment;
   suggestedAction?: 'next' | 'finalize' | 'terminate';
   linkedTaskId?: string;
+  emperorNotes?: Array<{ at: string; text: string }>;
   discussion?: CourtDiscussEntry[];
   partial?: CourtDiscussEntry[];
   final?: CourtDiscussFinal;
