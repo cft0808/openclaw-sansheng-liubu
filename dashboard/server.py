@@ -1045,7 +1045,11 @@ def _run_aihub_gemini_content(model_name, message, timeout_sec=120):
     model_id = model_name.split('/', 1)[1] if '/' in model_name else model_name
     root = _aihub_base_root(provider['baseUrl'])
     payload = {
+        # gemini 原生协议字段
         'contents': [{'parts': [{'text': message}]}],
+        # aihub 兼容层需要这两个字段，否则 gemini-3-flash-preview 可能报参数缺失
+        'model': model_id,
+        'messages': [{'role': 'user', 'content': message}],
     }
     headers = {
         'Content-Type': 'application/json',
