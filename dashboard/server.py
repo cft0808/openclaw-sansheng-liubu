@@ -1929,7 +1929,7 @@ _CONTROL_ACTION_ALLOWLIST = {
     'Taizi': {'dispatch', 'advance', 'retry', 'noop'},
     'Zhongshu': {'dispatch', 'advance', 'retry', 'escalate', 'noop'},
     'Assigned': {'dispatch', 'retry', 'escalate', 'advance', 'rollback', 'wait_human', 'noop'},
-    'Doing': {'retry', 'writeback_retry', 'advance', 'wait_human', 'noop'},
+    'Doing': {'dispatch', 'retry', 'writeback_retry', 'advance', 'wait_human', 'noop'},
     'ExecutionOutputReady': {'writeback_retry', 'wait_human', 'noop'},
     'WritebackPending': {'writeback_retry', 'wait_human', 'noop'},
     'RetryableFailure': {'retry', 'wait_human', 'rollback', 'noop'},

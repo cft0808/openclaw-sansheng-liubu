@@ -242,7 +242,7 @@ def test_review_approve_clears_dispatch_cooldown_and_dispatches(tmp_path, monkey
     assert (sched.get('lease') or {}).get('ownerRunId', '') == ''
 
 
-def test_auto_handoff_to_execution_releases_lease_and_clears_cooldown(tmp_path, monkeypatch):
+def test_auto_handoff_to_execution_releases_lease_and_dispatches_executor(tmp_path, monkeypatch):
     data_dir = tmp_path / 'data'
     data_dir.mkdir()
     srv.DATA = data_dir
@@ -313,9 +313,9 @@ def test_auto_handoff_to_execution_releases_lease_and_clears_cooldown(tmp_path, 
     sched = latest.get('_scheduler') or {}
     assert latest.get('state') == 'Doing'
     assert latest.get('org') == '工部'
-    cds = sched.get('cooldowns') or {}
-    assert 'noDispatchUntil' not in cds
-    assert 'noEscalateUntil' not in cds
+    assert sched.get('lastDispatchAgent') == 'gongbu'
+    assert sched.get('lastDispatchStatus') == 'success'
+    assert int(sched.get('dispatchAttempts') or 0) >= 1
     assert (sched.get('lease') or {}).get('ownerRunId', '') == ''
 
 
