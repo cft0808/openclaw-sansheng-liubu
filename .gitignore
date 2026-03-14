@@ -31,3 +31,4 @@ edict/frontend/node_modules/
 # Backups
 *.bak*
 data
+.helloagents/

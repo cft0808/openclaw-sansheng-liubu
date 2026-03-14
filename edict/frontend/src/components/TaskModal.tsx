@@ -224,6 +224,8 @@ export default function TaskModal() {
   // Scheduler state
   const sched = schedData?.scheduler;
   const stalledSec = schedData?.stalledSec || 0;
+  const stateAgeSec = schedData?.stateAgeSec || 0;
+  const decision = schedData?.decision || sched?.decisionPacket || null;
 
   return (
     <div className="modal-bg open" onClick={close}>
@@ -296,16 +298,45 @@ export default function TaskModal() {
             </div>
             <div className="sched-grid">
               <div className="sched-kpi"><div className="k">停滞时长</div><div className="v">{fmtStalled(stalledSec)}</div></div>
+              <div className="sched-kpi"><div className="k">状态驻留</div><div className="v">{fmtStalled(stateAgeSec)}</div></div>
               <div className="sched-kpi"><div className="k">重试次数</div><div className="v">{sched?.retryCount || 0}</div></div>
               <div className="sched-kpi"><div className="k">升级级别</div><div className="v">{!sched?.escalationLevel ? '无' : sched.escalationLevel === 1 ? '门下省' : '尚书省'}</div></div>
               <div className="sched-kpi"><div className="k">派发状态</div><div className="v">{sched?.lastDispatchStatus || 'idle'}</div></div>
+              <div className="sched-kpi"><div className="k">控制态</div><div className="v">{schedData?.controlState || sched?.controlState || '-'}</div></div>
+              <div className="sched-kpi"><div className="k">写回状态</div><div className="v">{schedData?.writeback?.status || sched?.writeback?.status || 'idle'}</div></div>
             </div>
+            {decision ? (
+              <div className="sched-line" style={{ marginTop: 10, display: 'block', border: '1px solid #ffb74d44', borderRadius: 10, padding: '10px 12px', background: '#ffb74d12' }}>
+                <div style={{ color: '#ffb74d', fontWeight: 700, marginBottom: 6 }}>🧾 拍板事项</div>
+                <div style={{ marginBottom: 8 }}>{decision.question}</div>
+                {(decision.options || []).map((opt, idx) => (
+                  <div key={`${opt.id}-${idx}`} style={{ marginBottom: 6 }}>
+                    <strong>{idx + 1}. {opt.label}{decision.recommended === opt.id ? '（推荐）' : ''}</strong>
+                    <div style={{ color: 'var(--muted)', fontSize: 12 }}>{opt.impact}</div>
+                  </div>
+                ))}
+                {(decision.evidence || []).length > 0 && (
+                  <div style={{ marginTop: 8, color: 'var(--muted)', fontSize: 12 }}>
+                    {(decision.evidence || []).slice(0, 4).map((ev, i) => (
+                      <div key={i}>- {ev}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="sched-line" style={{ marginTop: 10, display: 'block', border: '1px dashed #8a94a64d', borderRadius: 10, padding: '8px 12px', color: 'var(--muted)' }}>
+                当前无拍板事项（仅在门下省/审查节点停滞时触发）
+              </div>
+            )}
             {sched && (
               <div className="sched-line">
                 {sched.lastProgressAt && <span>最近进展 {(sched.lastProgressAt || '').replace('T', ' ').substring(0, 19)}</span>}
                 {sched.lastDispatchAt && <span>最近派发 {(sched.lastDispatchAt || '').replace('T', ' ').substring(0, 19)}</span>}
                 <span>自动回滚 {sched.autoRollback === false ? '关闭' : '开启'}</span>
                 {sched.lastDispatchAgent && <span>目标 {sched.lastDispatchAgent}</span>}
+                {schedData?.lease?.ownerRunId && <span>租约 {schedData.lease.ownerRunId}</span>}
+                {schedData?.lastAction?.reasonCode && <span>原因码 {schedData.lastAction.reasonCode}</span>}
+                {schedData?.writeback?.lastError && <span>写回错误 {schedData.writeback.lastError}</span>}
               </div>
             )}
             <div className="sched-actions">

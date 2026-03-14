@@ -39,6 +39,12 @@ export const api = {
     fetchJ<TaskActivityData>(`${API_BASE}/api/task-activity/${encodeURIComponent(id)}`),
   schedulerState: (id: string) =>
     fetchJ<SchedulerStateData>(`${API_BASE}/api/scheduler-state/${encodeURIComponent(id)}`),
+  schedulerMetrics: (id?: string) =>
+    fetchJ<SchedulerMetricsData>(
+      id
+        ? `${API_BASE}/api/scheduler-metrics/${encodeURIComponent(id)}`
+        : `${API_BASE}/api/scheduler-metrics`
+    ),
 
   // 技能内容
   skillContent: (agentId: string, skillName: string) =>
@@ -72,6 +78,20 @@ export const api = {
     postJ<ActionResult>(`${API_BASE}/api/scheduler-escalate`, { taskId, reason }),
   schedulerRollback: (taskId: string, reason: string) =>
     postJ<ActionResult>(`${API_BASE}/api/scheduler-rollback`, { taskId, reason }),
+  schedulerAction: (
+    taskId: string,
+    action: string,
+    reason: string,
+    expectedVersion?: number,
+    recoveryTarget?: 'continue_execution' | 'continue_writeback' | 'reassign' | 'terminate'
+  ) =>
+    postJ<ActionResult>(`${API_BASE}/api/scheduler-action`, {
+      taskId,
+      action,
+      reason,
+      expectedVersion,
+      recoveryTarget,
+    }),
   refreshMorning: () =>
     postJ<ActionResult>(`${API_BASE}/api/morning-brief/refresh`, {}),
   saveMorningConfig: (config: SubConfig) =>
@@ -93,6 +113,8 @@ export const api = {
 
   createTask: (data: CreateTaskPayload) =>
     postJ<ActionResult & { taskId?: string }>(`${API_BASE}/api/create-task`, data),
+  courtDiscuss: (data: CourtDiscussPayload) =>
+    postJ<CourtDiscussResult>(`${API_BASE}/api/court-discuss`, data),
 };
 
 // ── Types ──
@@ -336,20 +358,107 @@ export interface TaskActivityData {
 export interface SchedulerInfo {
   retryCount?: number;
   escalationLevel?: number;
+  stateVersion?: number;
   lastDispatchStatus?: string;
   stallThresholdSec?: number;
   enabled?: boolean;
   lastProgressAt?: string;
   lastDispatchAt?: string;
   lastDispatchAgent?: string;
+  dispatchAttempts?: number;
   autoRollback?: boolean;
+  autoAdvance?: boolean;
+  stateSince?: string;
+  maxStateAgeSec?: number;
+  controlState?: string;
+  cooldowns?: Record<string, string>;
+  lease?: LeaseInfo;
+  writeback?: WritebackInfo;
+  lastAction?: { action?: string; reasonCode?: string; at?: string };
+  lastCommit?: { action?: string; reasonCode?: string; result?: string; blockedBy?: string; version?: number };
+  awaitingEmperorDecision?: boolean;
+  decisionPacket?: DecisionPacket | null;
+}
+
+export interface LeaseInfo {
+  stage?: string;
+  role?: string;
+  ownerRunId?: string;
+  acquiredAt?: string;
+  heartbeatAt?: string;
+  ttlSec?: number;
+}
+
+export interface WritebackInfo {
+  status?: string;
+  retryCount?: number;
+  maxRetry?: number;
+  firstOutputAt?: string;
+  lastCommittedAt?: string;
+  lastError?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  label: string;
+  impact: string;
+}
+
+export interface DecisionPacket {
+  state: string;
+  question: string;
+  options: DecisionOption[];
+  recommended?: string;
+  evidence?: string[];
+  generatedAt?: string;
 }
 
 export interface SchedulerStateData {
   ok: boolean;
   error?: string;
+  taskId?: string;
+  state?: string;
+  org?: string;
   scheduler?: SchedulerInfo;
+  controlState?: string;
+  lease?: LeaseInfo;
+  lastAction?: { action?: string; reasonCode?: string; at?: string };
+  writeback?: WritebackInfo;
+  decision?: DecisionPacket | null;
   stalledSec?: number;
+  stateAgeSec?: number;
+  stateAgeLimitSec?: number;
+}
+
+export interface SchedulerTaskMetric {
+  taskId: string;
+  state: string;
+  dispatchAttempts: number;
+  uniqueExecutionSteps: number;
+  dispatchAmplificationRatio: number;
+  controlActions: number;
+  invalidControlActions: number;
+  invalidControlRatio: number;
+  writebackLagSec: number | null;
+  writebackStatus: string;
+}
+
+export interface SchedulerMetricsData {
+  ok: boolean;
+  error?: string;
+  taskId?: string;
+  metrics?: SchedulerTaskMetric[];
+  summary?: {
+    taskCount: number;
+    dispatchAttempts: number;
+    uniqueExecutionSteps: number;
+    dispatchAmplificationRatio: number;
+    controlActions: number;
+    invalidControlActions: number;
+    invalidControlRatio: number;
+    avgWritebackLagSec: number | null;
+  };
+  checkedAt?: string;
 }
 
 export interface SkillContentResult {
@@ -376,6 +485,77 @@ export interface CreateTaskPayload {
   priority?: string;
   templateId?: string;
   params?: Record<string, string>;
+}
+
+export interface CourtDiscussPayload {
+  action: 'start' | 'next' | 'finalize' | 'status' | 'handoff' | 'terminate';
+  topic?: string;
+  participants?: string[];
+  sessionId?: string;
+  force?: boolean;
+  emperorNote?: string;
+}
+
+export interface CourtDiscussEntry {
+  entryId?: string;
+  round: number;
+  turn?: number;
+  totalTurns?: number;
+  agentId: string;
+  agentLabel: string;
+  reply: string;
+  error?: boolean;
+  status?: 'speaking' | 'done' | 'error';
+  at: string;
+}
+
+export interface CourtDiscussFinal {
+  ready_for_edict: boolean;
+  clarified_goal: string;
+  risks: string[];
+  questions_to_emperor: string[];
+  recommended_edict: string;
+  recommended_target_dept: string;
+  recommended_priority: 'low' | 'normal' | 'high' | 'critical';
+  raw?: string;
+}
+
+export interface CourtDiscussAssessment {
+  round: number;
+  moderatorId: string;
+  moderatorLabel: string;
+  recommend_stop: boolean;
+  reason: string;
+  question_to_emperor: string;
+  focus_next_round: string[];
+  draft_direction: string;
+  raw?: string;
+  at?: string;
+}
+
+export interface CourtDiscussResult extends ActionResult {
+  sessionId?: string;
+  status?: 'ongoing' | 'done' | 'handoffed' | 'terminated';
+  roundRunning?: boolean;
+  currentRound?: number;
+  speakingNow?: {
+    round?: number;
+    turn?: number;
+    totalTurns?: number;
+    agentId?: string;
+    agentLabel?: string;
+  };
+  topic?: string;
+  participants?: string[];
+  rounds?: number;
+  moderator?: { id: string; label: string };
+  assessment?: CourtDiscussAssessment;
+  suggestedAction?: 'next' | 'finalize' | 'terminate';
+  linkedTaskId?: string;
+  emperorNotes?: Array<{ at: string; text: string }>;
+  discussion?: CourtDiscussEntry[];
+  partial?: CourtDiscussEntry[];
+  final?: CourtDiscussFinal;
 }
 
 export interface RemoteSkillItem {

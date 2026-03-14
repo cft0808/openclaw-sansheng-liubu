@@ -24,7 +24,25 @@
 """
 import json, pathlib, datetime, sys, subprocess, logging, os, re
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
+_LOCAL_BASE = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _resolve_shared_base():
+    """Resolve a shared kanban workspace base across multi-agent workspaces."""
+    env_base = (os.environ.get('EDICT_SHARED_BASE') or os.environ.get('EDICT_KANBAN_BASE') or '').strip()
+    if env_base:
+        p = pathlib.Path(env_base).expanduser()
+        if (p / 'data' / 'tasks_source.json').exists():
+            return p
+
+    default_shared = pathlib.Path.home() / '.openclaw' / 'workspace' / 'edict'
+    if (default_shared / 'data' / 'tasks_source.json').exists():
+        return default_shared
+
+    return _LOCAL_BASE
+
+
+_BASE = _resolve_shared_base()
 TASKS_FILE = _BASE / 'data' / 'tasks_source.json'
 REFRESH_SCRIPT = _BASE / 'scripts' / 'refresh_live_data.py'
 
@@ -62,6 +80,30 @@ _AGENT_LABELS = {
 }
 
 MAX_PROGRESS_LOG = 100  # 单任务最大进展日志条数
+DEDUP_WINDOW_SEC = 60
+
+
+def _parse_iso(ts):
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts.replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+
+def _is_duplicate_within(log_list, matcher, window_sec=DEDUP_WINDOW_SEC):
+    if not log_list:
+        return False
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    for item in reversed(log_list[-20:]):
+        if not matcher(item):
+            continue
+        at_dt = _parse_iso(item.get('at'))
+        if at_dt and (now_dt - at_dt).total_seconds() <= window_sec:
+            return True
+        break
+    return False
 
 def load():
     return atomic_json_read(TASKS_FILE, [])
@@ -82,6 +124,29 @@ def find_task(tasks, task_id):
     return next((t for t in tasks if t.get('id') == task_id), None)
 
 
+def _touch_scheduler(task, reset_retry=False):
+    """同步调度心跳，避免任务被误判为停滞。"""
+    sched = task.get('_scheduler')
+    if not isinstance(sched, dict):
+        sched = {}
+        task['_scheduler'] = sched
+    cur_state = task.get('state', '')
+    sched.setdefault('maxStateAgeSec', 900)
+    if not sched.get('stateSince'):
+        sched['stateSince'] = now_iso()
+    if sched.get('stateName') != cur_state:
+        sched['stateName'] = cur_state
+        sched['stateSince'] = now_iso()
+    sched['lastProgressAt'] = now_iso()
+    sched['stallSince'] = None
+    sched['awaitingEmperorDecision'] = False
+    sched['decisionPacket'] = None
+    if reset_retry:
+        sched['retryCount'] = 0
+        sched['escalationLevel'] = 0
+        sched['lastEscalatedAt'] = None
+
+
 # 旨意标题最低要求
 _MIN_TITLE_LEN = 6
 _JUNK_TITLES = {
@@ -91,7 +156,7 @@ _JUNK_TITLES = {
 }
 
 def _sanitize_text(raw, max_len=80):
-    """清洗文本：剥离文件路径、URL、Conversation 元数据、传旨前缀、截断过长内容。"""
+    """清洗文本：剥离文件路径、URL、Conversation 元数据、传旨前缀。"""
     t = (raw or '').strip()
     # 1) 剥离 Conversation info / Conversation 后面的所有内容
     t = re.split(r'\n*Conversation\b', t, maxsplit=1)[0].strip()
@@ -107,15 +172,15 @@ def _sanitize_text(raw, max_len=80):
     t = re.sub(r'(message_id|session_id|chat_id|open_id|user_id|tenant_key)\s*[:=]\s*\S+', '', t)
     # 7) 合并多余空白
     t = re.sub(r'\s+', ' ', t).strip()
-    # 8) 截断过长内容
-    if len(t) > max_len:
+    # 8) 截断过长内容（max_len<=0 表示不截断）
+    if max_len and max_len > 0 and len(t) > max_len:
         t = t[:max_len] + '…'
     return t
 
 
 def _sanitize_title(raw):
-    """清洗标题（最长 80 字符）。"""
-    return _sanitize_text(raw, 80)
+    """清洗标题（不截断，保留长指令全文）。"""
+    return _sanitize_text(raw, 0)
 
 
 def _sanitize_remark(raw):
@@ -219,6 +284,7 @@ def cmd_state(task_id, new_state, now_text=None):
             t['org'] = STATE_ORG_MAP[new_state]
         if now_text:
             t['now'] = now_text
+        _touch_scheduler(t, reset_retry=True)
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
@@ -229,19 +295,36 @@ def cmd_state(task_id, new_state, now_text=None):
 def cmd_flow(task_id, from_dept, to_dept, remark):
     """添加流转记录（原子操作）"""
     clean_remark = _sanitize_remark(remark)
+    deduped = [False]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
             log.error(f'任务 {task_id} 不存在')
             return tasks
+        flow_log = t.setdefault('flow_log', [])
+        if _is_duplicate_within(
+            flow_log,
+            lambda x: (
+                x.get('from') == from_dept
+                and x.get('to') == to_dept
+                and x.get('remark') == clean_remark
+            ),
+            window_sec=DEDUP_WINDOW_SEC,
+        ):
+            deduped[0] = True
+            return tasks
         t.setdefault('flow_log', []).append({
             "at": now_iso(), "from": from_dept, "to": to_dept, "remark": clean_remark
         })
+        _touch_scheduler(t)
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     save(load())  # trigger refresh
-    log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
+    if deduped[0]:
+        log.info(f'ℹ️ {task_id} 流转去重: {from_dept} → {to_dept} (60s窗口)')
+    else:
+        log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
 
 
 def cmd_done(task_id, output_path='', summary=''):
@@ -258,6 +341,7 @@ def cmd_done(task_id, output_path='', summary=''):
             "at": now_iso(), "from": t.get('org', '执行部门'),
             "to": "皇上", "remark": f"✅ 完成：{summary or '任务已完成'}"
         })
+        _touch_scheduler(t, reset_retry=True)
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
@@ -274,6 +358,7 @@ def cmd_block(task_id, reason):
             return tasks
         t['state'] = 'Blocked'
         t['block'] = reason
+        _touch_scheduler(t, reset_retry=True)
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
@@ -332,6 +417,7 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
 
     done_cnt = [0]
     total_cnt = [0]
+    deduped = [False]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
@@ -357,10 +443,25 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
             log_entry['cost'] = cost
         if elapsed > 0:
             log_entry['elapsed'] = elapsed
+        progress_log = t.setdefault('progress_log', [])
+        if _is_duplicate_within(
+            progress_log,
+            lambda x: (
+                x.get('agent') == log_entry.get('agent')
+                and x.get('text') == log_entry.get('text')
+                and x.get('state') == log_entry.get('state')
+            ),
+            window_sec=DEDUP_WINDOW_SEC,
+        ):
+            deduped[0] = True
+            done_cnt[0] = sum(1 for td in t.get('todos', []) if td.get('status') == 'completed')
+            total_cnt[0] = len(t.get('todos', []))
+            return tasks
         t.setdefault('progress_log', []).append(log_entry)
         # 限制 progress_log 大小，防止无限增长
         if len(t['progress_log']) > MAX_PROGRESS_LOG:
             t['progress_log'] = t['progress_log'][-MAX_PROGRESS_LOG:]
+        _touch_scheduler(t, reset_retry=True)
         t['updatedAt'] = at
         done_cnt[0] = sum(1 for td in t.get('todos', []) if td.get('status') == 'completed')
         total_cnt[0] = len(t.get('todos', []))
@@ -370,7 +471,10 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
     res_info = ''
     if tokens or cost or elapsed:
         res_info = f' [res: {tokens}tok/${cost:.4f}/{elapsed}s]'
-    log.info(f'📡 {task_id} 进展: {clean[:40]}... [{done_cnt[0]}/{total_cnt[0]}]{res_info}')
+    if deduped[0]:
+        log.info(f'ℹ️ {task_id} 进展去重: {clean[:40]}... [{done_cnt[0]}/{total_cnt[0]}]{res_info}')
+    else:
+        log.info(f'📡 {task_id} 进展: {clean[:40]}... [{done_cnt[0]}/{total_cnt[0]}]{res_info}')
 
 def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
     """添加或更新子任务 todo（原子操作）
@@ -401,6 +505,7 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
             if detail:
                 item['detail'] = detail
             t['todos'].append(item)
+        _touch_scheduler(t)
         t['updatedAt'] = now_iso()
         result_info[0] = sum(1 for td in t['todos'] if td.get('status') == 'completed')
         result_info[1] = len(t['todos'])
