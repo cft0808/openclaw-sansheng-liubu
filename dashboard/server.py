@@ -11,7 +11,7 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, shlex, uuid
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, shlex, uuid, difflib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -923,6 +923,17 @@ def _extract_json_obj(text):
         return None
 
 
+def _looks_like_provider_tool_error(text):
+    s = (text or '').strip()
+    if not s:
+        return False
+    if 'Invalid JSON payload' in s and 'patternProperties' in s:
+        return True
+    if 'Unknown name "patternProperties"' in s:
+        return True
+    return False
+
+
 def _run_agent_sync(agent_id, message, timeout_sec=120):
     if not _SAFE_NAME_RE.match(agent_id):
         raise ValueError(f'agent_id 非法: {agent_id}')
@@ -933,6 +944,8 @@ def _run_agent_sync(agent_id, message, timeout_sec=120):
     if result.returncode != 0:
         raise RuntimeError(err[:400] or output[:400] or f'agent {agent_id} failed')
     text = output or err
+    if _looks_like_provider_tool_error(text):
+        raise RuntimeError(text[:400])
     return text[:12000]
 
 
@@ -1022,6 +1035,65 @@ def _append_emperor_note(session, note):
     notes.append({'at': now_iso(), 'text': n[:600]})
     if len(notes) > 30:
         session['emperorNotes'] = notes[-30:]
+
+
+def _normalize_compare_text(text):
+    if not text:
+        return ''
+    return re.sub(r'[\W_]+', '', str(text), flags=re.UNICODE).lower()
+
+
+def _needs_edict_fallback(topic, recommended_edict):
+    title = (recommended_edict or '').strip()
+    if len(title) < 20:
+        return True
+    topic_norm = _normalize_compare_text(topic)
+    title_norm = _normalize_compare_text(title)
+    if not title_norm:
+        return True
+    if topic_norm and (title_norm == topic_norm or title_norm in topic_norm or topic_norm in title_norm):
+        return True
+    if topic_norm:
+        ratio = difflib.SequenceMatcher(None, topic_norm[:240], title_norm[:240]).ratio()
+        if ratio >= 0.82:
+            return True
+    return False
+
+
+def _build_fallback_edict_text(session, final_obj):
+    topic = str(session.get('topic') or '').strip()
+    clarified_goal = str(final_obj.get('clarified_goal') or '').strip()
+    latest_assessment = (session.get('assessments') or [])[-1] if session.get('assessments') else {}
+    draft_direction = str((latest_assessment or {}).get('draft_direction') or '').strip()
+    latest_note = ''
+    emperor_notes = session.get('emperorNotes') or []
+    if emperor_notes:
+        latest_note = str(emperor_notes[-1].get('text') or '').strip()
+
+    round_no = int(session.get('rounds') or 0)
+    highlights = []
+    for x in (session.get('discussion') or []):
+        if int(x.get('round') or 0) != round_no:
+            continue
+        label = str(x.get('agentLabel') or '').strip()
+        reply = str(x.get('reply') or '').strip()
+        if not label or not reply:
+            continue
+        reply_line = re.sub(r'\s+', ' ', reply).strip()
+        if len(reply_line) > 90:
+            reply_line = reply_line[:90] + '...'
+        highlights.append(f'{label}：{reply_line}')
+    if len(highlights) > 3:
+        highlights = highlights[:3]
+
+    goal = clarified_goal or draft_direction or topic
+    lines = [f'请太子牵头办理：{goal}。']
+    if highlights:
+        lines.append('议政要点：' + '；'.join(highlights) + '。')
+    if latest_note:
+        lines.append(f'皇上最终拍板：{latest_note}。')
+    lines.append('请形成执行方案、风险清单与里程碑，并按节点回报。')
+    return '\n'.join(lines).strip()
 
 
 def _build_court_response(session, message=''):
@@ -1445,6 +1517,8 @@ def _finalize_court_session(session, force=False):
         'forceFinalized': bool(force),
         'raw': synth_raw[:4000],
     }
+    if _needs_edict_fallback(topic, final.get('recommended_edict', '')):
+        final['recommended_edict'] = _build_fallback_edict_text(session, final)
     if final['recommended_priority'] not in ('low', 'normal', 'high', 'critical'):
         final['recommended_priority'] = 'normal'
     if final['recommended_target_dept'] not in ('中书省', '尚书省', '礼部', '户部', '兵部', '刑部', '工部', '吏部'):
@@ -1517,12 +1591,21 @@ def handle_court_discuss(action='start', topic='', participants=None, session_id
     session = _load_court_session(session_id)
     if not session:
         return {'ok': False, 'error': f'讨论会话 {session_id} 不存在'}
-    _append_emperor_note(session, emperor_note)
+    note = (emperor_note or '').strip()
+    if note:
+        updated = _update_court_session(
+            session_id,
+            lambda s: (
+                _append_emperor_note(s, note),
+                s.update({'updatedAt': now_iso()}),
+            ),
+        )
+        if updated:
+            session = updated
 
     if action == 'status':
-        session['updatedAt'] = now_iso()
-        _upsert_court_session(session)
-        return _build_court_response(session, session.get('message', '会话状态已返回'))
+        latest = _load_court_session(session_id) or session
+        return _build_court_response(latest, latest.get('message', '会话状态已返回'))
 
     if action == 'next':
         if session.get('status') in ('done', 'handoffed', 'terminated'):

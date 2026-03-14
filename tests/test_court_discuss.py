@@ -152,3 +152,86 @@ def test_court_round_degrades_on_agent_schema_error(tmp_path, monkeypatch):
     assert len(round_entries) == 3
     assert any(bool(x.get('error')) for x in round_entries)
     assert assessment.get('reason')
+
+
+def test_next_round_persists_emperor_note(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+
+    started = srv.handle_court_discuss(
+        action='start',
+        topic='讨论任务提交闸门和执行闭环是否需要强约束',
+        participants=['taizi', 'zhongshu', 'menxia'],
+    )
+    sid = started['sessionId']
+
+    note = '下一轮请只保留可直接落地的方案与风险对策'
+    next_round = srv.handle_court_discuss(action='next', session_id=sid, emperor_note=note)
+    assert next_round['ok'] is True
+    latest = srv._load_court_session(sid)
+    assert latest
+    assert (latest.get('emperorNotes') or [])[-1].get('text') == note
+
+
+def test_finalize_builds_fallback_edict_when_too_close_to_topic(tmp_path, monkeypatch):
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    srv.DATA = data_dir
+
+    session = {
+        'id': 'CD-TEST-FINAL',
+        'topic': '请讨论并确定看板自动调度震荡治理方案',
+        'participants': ['taizi', 'zhongshu', 'menxia'],
+        'moderatorId': 'taizi',
+        'status': 'ongoing',
+        'rounds': 1,
+        'discussion': [
+            {
+                'round': 1,
+                'turn': 1,
+                'totalTurns': 3,
+                'agentId': 'taizi',
+                'agentLabel': '太子',
+                'reply': '建议优先收口状态写入入口，避免多写者竞争。',
+                'at': srv.now_iso(),
+            },
+            {
+                'round': 1,
+                'turn': 2,
+                'totalTurns': 3,
+                'agentId': 'zhongshu',
+                'agentLabel': '中书省',
+                'reply': '建议将写回和执行分离，提交失败只走提交重试链路。',
+                'at': srv.now_iso(),
+            },
+        ],
+        'assessments': [
+            {
+                'round': 1,
+                'moderatorId': 'taizi',
+                'moderatorLabel': '太子',
+                'recommend_stop': True,
+                'reason': '讨论充分，已形成可执行方向',
+                'question_to_emperor': '是否按此交办',
+                'focus_next_round': [],
+                'draft_direction': '围绕单写入口和提交闭环推进',
+                'raw': '',
+                'at': srv.now_iso(),
+            }
+        ],
+        'emperorNotes': [{'at': srv.now_iso(), 'text': '以稳定性优先，先落地单写入口。'}],
+    }
+
+    def _mock_agent(_aid, _prompt, timeout_sec=120):
+        return (
+            '{"ready_for_edict": true, "clarified_goal": "完成调度治理", '
+            '"risks": [], "questions_to_emperor": [], '
+            '"recommended_edict": "请讨论并确定看板自动调度震荡治理方案", '
+            '"recommended_target_dept": "中书省", "recommended_priority": "high"}'
+        )
+
+    monkeypatch.setattr(srv, '_run_agent_sync', _mock_agent)
+    result = srv._finalize_court_session(session)
+    assert result['ok'] is True
+    final = result.get('final') or {}
+    assert final.get('recommended_edict') != session['topic']
+    assert '皇上最终拍板' in (final.get('recommended_edict') or '')
