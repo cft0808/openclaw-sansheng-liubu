@@ -315,6 +315,11 @@ def add_remote_skill(agent_id, skill_name, source_url, description=''):
     if not content.startswith('---'):
         return {'ok': False, 'error': '文件格式无效（缺少 YAML frontmatter）'}
     
+    # 安全检查：限制文件大小（1MB）
+    MAX_FILE_SIZE = 1 * 1024 * 1024
+    if len(content) > MAX_FILE_SIZE:
+        return {'ok': False, 'error': f'文件过大 ({len(content)} > {MAX_FILE_SIZE} bytes)'}
+    
     # 尝试解析 frontmatter
     try:
         import yaml
@@ -322,7 +327,8 @@ def add_remote_skill(agent_id, skill_name, source_url, description=''):
         if len(parts) < 3:
             return {'ok': False, 'error': '文件格式无效（YAML frontmatter 结构错误）'}
         frontmatter_str = parts[1]
-        yaml.safe_load(frontmatter_str)  # 验证 YAML 格式
+        # 使用 safe_load 防止反序列化攻击
+        yaml.safe_load(frontmatter_str)
     except Exception as e:
         # 不要求完全的 YAML 解析，但要检查基本结构
         if 'name:' not in content[:500]:
@@ -651,6 +657,83 @@ def handle_review_action(task_id, action, comment=''):
     dispatched = ' (已自动派发 Agent)' if new_state != 'Done' else ''
     return {'ok': True, 'message': f'{task_id} {label}{dispatched}'}
 
+
+
+# ══ 安全工具函数 ══
+
+ALLOWED_ROOTS = None
+
+def get_allowed_roots():
+    global ALLOWED_ROOTS
+    if ALLOWED_ROOTS is None:
+        ALLOWED_ROOTS = [
+            (OCLAW_HOME / 'skills').resolve(),
+            (OCLAW_HOME / 'workspace').resolve(),
+        ]
+    return ALLOWED_ROOTS
+
+def retry_with_backoff(exceptions=(Exception,), max_retries=3, base_delay=1.0, max_delay=60.0):
+    import time, random
+    from functools import wraps
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    if attempt == max_retries - 1:
+                        break
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    delay += random.uniform(0, 0.1 * delay)
+                    time.sleep(delay)
+            raise last_exception
+        return wrapper
+    return decorator
+
+class InputValidator:
+    SAFE_NAME_RE = None
+    
+    @staticmethod
+    def validate_string(value, field_name, max_length=100):
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must be a string")
+        if len(value) > max_length:
+            raise ValueError(f"{field_name} exceeds max length ({max_length})")
+        if not value.strip():
+            raise ValueError(f"{field_name} cannot be empty")
+        return value.strip()
+    
+    @staticmethod
+    def validate_safe_name(value, field_name='name'):
+        if InputValidator.SAFE_NAME_RE is None:
+            import re
+            InputValidator.SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9_\-\u4e00-\u9fff]+$')
+        value = InputValidator.validate_string(value, field_name)
+        if not InputValidator.SAFE_NAME_RE.match(value):
+            raise ValueError(f"{field_name} contains invalid characters")
+        return value
+
+def sanitize_error(e, max_length=100):
+    import re
+    error_msg = str(e)
+    error_msg = re.sub(r'/Users/[^/]+/', '~/...', error_msg)
+    error_msg = re.sub(r'password[=:][^\s]+', 'password=***', error_msg, flags=re.IGNORECASE)
+    return error_msg[:max_length]
+
+def safe_path(user_path, allowed_roots=None):
+    if allowed_roots is None:
+        allowed_roots = get_allowed_roots()
+    user_path = pathlib.Path(user_path).resolve()
+    for root in allowed_roots:
+        try:
+            user_path.relative_to(root)
+            return user_path
+        except ValueError:
+            continue
+    raise ValueError(f"Path not in allowed directories: {user_path}")
 
 # ══ Agent 在线状态检测 ══
 
