@@ -94,6 +94,23 @@ create_workspaces() {
   
   AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
   for agent in "${AGENTS[@]}"; do
+    # 同时处理 main workspace
+    if [ "$agent" = "taizi" ]; then
+      ws_main="$OC_HOME/workspace"
+      if [ -d "$ws_main" ]; then
+        mkdir -p "$ws_main/data"
+        for f in tasks_source.json live_status.json agent_config.json officials_stats.json sync_status.json morning_brief.json pending_model_changes.json model_change_log.json; do
+          if [ -f "$REPO_DIR/data/$f" ]; then
+            if [ -f "$ws_main/data/$f" ] && [ ! -L "$ws_main/data/$f" ]; then
+              mv "$ws_main/data/$f" "$ws_main/data/$f.bak.$(date +%Y%m%d-%H%M%S)"
+            fi
+            rm -f "$ws_main/data/$f"
+            ln -sf "$REPO_DIR/data/$f" "$ws_main/data/$f"
+          fi
+        done
+        log "资源链接: main"
+      fi
+    fi
     ws="$OC_HOME/workspace-$agent"
     mkdir -p "$ws/skills"
     if [ -f "$REPO_DIR/agents/$agent/SOUL.md" ]; then
@@ -109,6 +126,23 @@ create_workspaces() {
 
   # 通用 AGENTS.md（工作协议）
   for agent in "${AGENTS[@]}"; do
+    # 同时处理 main workspace
+    if [ "$agent" = "taizi" ]; then
+      ws_main="$OC_HOME/workspace"
+      if [ -d "$ws_main" ]; then
+        mkdir -p "$ws_main/data"
+        for f in tasks_source.json live_status.json agent_config.json officials_stats.json sync_status.json morning_brief.json pending_model_changes.json model_change_log.json; do
+          if [ -f "$REPO_DIR/data/$f" ]; then
+            if [ -f "$ws_main/data/$f" ] && [ ! -L "$ws_main/data/$f" ]; then
+              mv "$ws_main/data/$f" "$ws_main/data/$f.bak.$(date +%Y%m%d-%H%M%S)"
+            fi
+            rm -f "$ws_main/data/$f"
+            ln -sf "$REPO_DIR/data/$f" "$ws_main/data/$f"
+          fi
+        done
+        log "资源链接: main"
+      fi
+    fi
     cat > "$OC_HOME/workspace-$agent/AGENTS.md" << 'AGENTS_EOF'
 # AGENTS.md · 工作协议
 
@@ -120,7 +154,61 @@ AGENTS_EOF
   done
 }
 
-# ── Step 2: 注册 Agents ─────────────────────────────────────
+
+# ── Step 2.5: 链接共享资源 ───────────────────────────────────
+link_resources() {
+  info "链接共享资源 (scripts + data)..."
+
+  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+
+  for agent in "${AGENTS[@]}"; do
+    # 同时处理 main workspace
+    if [ "$agent" = "taizi" ]; then
+      ws_main="$OC_HOME/workspace"
+      if [ -d "$ws_main" ]; then
+        mkdir -p "$ws_main/data"
+        for f in tasks_source.json live_status.json agent_config.json officials_stats.json sync_status.json morning_brief.json pending_model_changes.json model_change_log.json; do
+          if [ -f "$REPO_DIR/data/$f" ]; then
+            if [ -f "$ws_main/data/$f" ] && [ ! -L "$ws_main/data/$f" ]; then
+              mv "$ws_main/data/$f" "$ws_main/data/$f.bak.$(date +%Y%m%d-%H%M%S)"
+            fi
+            rm -f "$ws_main/data/$f"
+            ln -sf "$REPO_DIR/data/$f" "$ws_main/data/$f"
+          fi
+        done
+        log "资源链接: main"
+      fi
+    fi
+    ws="$OC_HOME/workspace-$agent"
+
+    if [ -d "$ws" ]; then
+      # 软链接 scripts 目录
+      if [ -e "$ws/scripts" ]; then
+        rm -rf "$ws/scripts"
+      fi
+      ln -sf "$REPO_DIR/scripts" "$ws/scripts"
+
+      # 创建 data 目录并软链接主数据文件
+      mkdir -p "$ws/data"
+
+      for f in tasks_source.json live_status.json agent_config.json officials_stats.json sync_status.json morning_brief.json pending_model_changes.json model_change_log.json; do
+        if [ -f "$REPO_DIR/data/$f" ]; then
+          if [ -f "$ws/data/$f" ] && [ ! -L "$ws/data/$f" ]; then
+            mv "$ws/data/$f" "$ws/data/$f.bak.$(date +%Y%m%d-%H%M%S)"
+          fi
+          rm -f "$ws/data/$f"
+          ln -sf "$REPO_DIR/data/$f" "$ws/data/$f"
+        fi
+      done
+
+      log "资源链接: $agent"
+    fi
+  done
+
+  log "共享资源链接完成"
+}
+
+
 register_agents() {
   info "注册三省六部 Agents..."
 
@@ -380,6 +468,7 @@ banner
 check_deps
 backup_existing
 create_workspaces
+link_resources
 register_agents
 init_data
 link_resources
