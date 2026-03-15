@@ -324,6 +324,27 @@ open http://127.0.0.1:7891
 
 > 💡 详细教程请看 [Getting Started 指南](docs/getting-started.md)
 
+#### 卸载
+
+```bash
+# 普通卸载（推荐先用这个）
+chmod +x uninstall.sh && ./uninstall.sh
+
+# 深度卸载（额外清理安装备份）
+./uninstall.sh --purge
+```
+
+卸载脚本会执行：
+- ✅ 备份现有数据到 `~/.openclaw/backups/pre-uninstall-*`
+- ✅ 删除三省六部 workspace（`~/.openclaw/workspace-{taizi,zhongshu,menxia,...}`）
+- ✅ 从 `openclaw.json` 注销三省六部 agents
+- ✅ 清理仓库 `data/` 下安装脚本初始化的文件
+
+`--purge` 会额外执行：
+- ✅ 删除 `~/.openclaw/agents/` 下三省六部相关目录（若存在）
+- ✅ 清理安装脚本产生的 `pre-install-*` 备份
+- ✅ 清理 `openclaw.json.bak.sansheng-*` 等配置备份文件
+
 ---
 
 ## 🏛️ 架构

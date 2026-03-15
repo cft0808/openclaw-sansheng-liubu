@@ -225,6 +225,27 @@ open http://127.0.0.1:7891
 
 > 📖 See [Getting Started Guide](docs/getting-started.md) for detailed walkthrough.
 
+### Uninstall
+
+```bash
+# Standard uninstall (recommended first)
+chmod +x uninstall.sh && ./uninstall.sh
+
+# Deep uninstall (extra cleanup of installer backups)
+./uninstall.sh --purge
+```
+
+The uninstall script will:
+- ✅ Back up existing data to `~/.openclaw/backups/pre-uninstall-*`
+- ✅ Remove Three Departments & Six Ministries workspaces (`~/.openclaw/workspace-{taizi,zhongshu,menxia,...}`)
+- ✅ Unregister related agents from `openclaw.json`
+- ✅ Clean installer-initialized files in the repo `data/` directory
+
+`--purge` additionally:
+- ✅ Removes related directories under `~/.openclaw/agents/` (if present)
+- ✅ Cleans installer-generated `pre-install-*` backups
+- ✅ Cleans project-generated backups like `openclaw.json.bak.sansheng-*`
+
 ---
 
 ## 🏛️ Architecture
