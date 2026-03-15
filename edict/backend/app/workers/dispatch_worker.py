@@ -165,6 +165,10 @@ class DispatchWorker:
 
         def _run():
             try:
+                import logging
+                log = logging.getLogger(__name__)
+                log.info(f"执行命令 (超时 300s): {' '.join(cmd)}")
+                
                 proc = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -173,13 +177,18 @@ class DispatchWorker:
                     env=env,
                     cwd=settings.openclaw_project_dir or None,
                 )
+                log.info(f"命令执行完成 (exit code: {proc.returncode})")
                 return {
                     "returncode": proc.returncode,
                     "stdout": proc.stdout[-5000:] if proc.stdout else "",
                     "stderr": proc.stderr[-2000:] if proc.stderr else "",
                 }
             except subprocess.TimeoutExpired:
+                log.error("命令执行超时 (300s)，已终止")
                 return {"returncode": -1, "stdout": "", "stderr": "TIMEOUT after 300s"}
+            except FileNotFoundError:
+                log.error(f"命令未找到：{cmd[0]}")
+                return {"returncode": -1, "stdout": "", "stderr": "openclaw command not found"}
             except FileNotFoundError:
                 return {"returncode": -1, "stdout": "", "stderr": "openclaw command not found"}
 
