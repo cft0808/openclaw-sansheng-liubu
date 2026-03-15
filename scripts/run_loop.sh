@@ -7,6 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# EDICT_HOME 指向中央仓库根目录，供各 workspace 里的 kanban_update.py 定位中央数据库
+export EDICT_HOME="$(dirname "$SCRIPT_DIR")"
 INTERVAL="${1:-15}"
 LOG="/tmp/sansheng_liubu_refresh.log"
 PIDFILE="/tmp/sansheng_liubu_refresh.pid"

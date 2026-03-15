@@ -24,7 +24,9 @@
 """
 import json, pathlib, sys, subprocess, logging, os, re
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
+# 优先使用环境变量 EDICT_HOME，兜底才用脚本相对路径
+# 这样脚本被 sync 到各 workspace 后仍能正确写入中央数据库
+_BASE = pathlib.Path(os.environ['EDICT_HOME']) if 'EDICT_HOME' in os.environ else pathlib.Path(__file__).resolve().parent.parent
 TASKS_FILE = _BASE / 'data' / 'tasks_source.json'
 REFRESH_SCRIPT = _BASE / 'scripts' / 'refresh_live_data.py'
 
