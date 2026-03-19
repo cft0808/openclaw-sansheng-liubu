@@ -14,6 +14,7 @@
   <a href="#-architecture">🏛️ Architecture</a> ·
   <a href="#-features">📋 Features</a> ·
   <a href="README.md">中文</a> ·
+  <a href="README_JA.md">日本語</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
