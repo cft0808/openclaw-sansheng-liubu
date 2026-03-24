@@ -3,7 +3,7 @@
 同步 openclaw.json 中的 agent 配置 → data/agent_config.json
 支持自动发现 agent workspace 下的 Skills 目录
 """
-import json, pathlib, datetime, logging
+import json, pathlib, datetime, logging, os
 from file_lock import atomic_json_write
 
 log = logging.getLogger('sync_agent_config')
