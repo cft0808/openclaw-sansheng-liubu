@@ -128,6 +128,10 @@ def main():
             continue
         meta = ID_LABEL[ag_id]
         workspace = ag.get('workspace', str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}'))
+        if 'allowAgents' in ag:
+            allow_agents = ag.get('allowAgents', []) or []
+        else:
+            allow_agents = ag.get('subagents', {}).get('allowAgents', [])
         result.append({
             'id': ag_id,
             'label': meta['label'], 'role': meta['role'], 'duty': meta['duty'], 'emoji': meta['emoji'],
@@ -135,7 +139,7 @@ def main():
             'defaultModel': default_model,
             'workspace': workspace,
             'skills': get_skills(workspace),
-            'allowAgents': ag.get('subagents', {}).get('allowAgents', []),
+            'allowAgents': allow_agents,
         })
         seen_ids.add(ag_id)
 

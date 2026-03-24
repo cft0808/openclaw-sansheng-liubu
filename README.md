@@ -15,6 +15,7 @@
   <a href="#-功能全景">📋 看板功能</a> ·
   <a href="docs/task-dispatch-architecture.md">📚 架构文档</a> ·
   <a href="README_EN.md">English</a> ·
+  <a href="README_JA.md">日本語</a> ·
   <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
 
