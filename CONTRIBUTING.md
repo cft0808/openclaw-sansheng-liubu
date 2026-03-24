@@ -81,9 +81,10 @@ open http://127.0.0.1:7891
 | `dashboard/dashboard.html` | 看板前端（单文件，零依赖，开箱即用） | 🔥 高 |
 | `dashboard/server.py` | API 服务器（stdlib，~2200 行） | 🔥 高 |
 | `agents/*/SOUL.md` | 12 个 Agent 人格模板 | 🔶 中 |
-| `scripts/kanban_update.py` | 看板 CLI + 数据清洗（~300 行） | 🔶 中 |
+| `dashboard/court_discuss.py` | 朝堂议政引擎（多官员 LLM 讨论） | 🔶 中 |
+| `scripts/kanban_update.py` | 看板 CLI + 数据清洗 + 状态机校验（~350 行） | 🔶 中 |
 | `scripts/*.py` | 数据同步 / 自动化脚本 | 🔶 中 |
-| `tests/test_e2e_kanban.py` | E2E 看板测试（17 断言） | 🔶 中 |
+| `tests/test_e2e_kanban.py` | E2E 看板测试（24 断言） | 🔶 中 |
 | `install.sh` | 安装脚本 | 🟢 低 |
 
 ---

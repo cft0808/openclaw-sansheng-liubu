@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "title": "军机处",
+    "ownerTitle": "皇上",
+    "version": "v3"
+  },
+  "states": ["Pending", "Taizi", "Zhongshu", "Menxia", "Assigned", "Next", "Doing", "Review", "Done", "Blocked", "Cancelled"],
+  "stateFlow": "Pending → Taizi → Zhongshu → Menxia → Assigned → Doing → Review → Done",
+  "terminalStates": ["Done", "Cancelled"],
+  "roles": {
+    "taizi": "太子",
+    "zhongshu": "中书省",
+    "menxia": "门下省",
+    "shangshu": "尚书省",
+    "hubu": "户部",
+    "libu": "礼部",
+    "bingbu": "兵部",
+    "xingbu": "刑部",
+    "gongbu": "工部",
+    "libu_hr": "吏部",
+    "zaochao": "钦天监"
+  },
+  "taskFields": [
+    "id",
+    "title",
+    "official",
+    "org",
+    "state",
+    "now",
+    "eta",
+    "block",
+    "output",
+    "ac",
+    "flow_log",
+    "updatedAt",
+    "todos",
+    "progress_log"
+  ]
+}

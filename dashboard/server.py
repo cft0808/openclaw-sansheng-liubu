@@ -20,7 +20,13 @@ from urllib.request import Request, urlopen
 scripts_dir = str(pathlib.Path(__file__).parent.parent / 'scripts')
 sys.path.insert(0, scripts_dir)
 from file_lock import atomic_json_read, atomic_json_write, atomic_json_update
-from utils import validate_url
+from utils import validate_url, read_json, now_iso
+from court_discuss import (
+    create_session as cd_create, advance_discussion as cd_advance,
+    get_session as cd_get, conclude_session as cd_conclude,
+    list_sessions as cd_list, destroy_session as cd_destroy,
+    get_fate_event as cd_fate, OFFICIAL_PROFILES as CD_PROFILES,
+)
 
 log = logging.getLogger('server')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
@@ -58,13 +64,6 @@ _MIME_TYPES = {
 }
 
 
-def read_json(path, default=None):
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return default if default is not None else {}
-
-
 def cors_headers(h):
     req_origin = h.headers.get('Origin', '')
     if ALLOWED_ORIGIN:
@@ -76,10 +75,6 @@ def cors_headers(h):
     h.send_header('Access-Control-Allow-Origin', origin)
     h.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     h.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-
-def now_iso():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
 def load_tasks():
@@ -315,18 +310,19 @@ def add_remote_skill(agent_id, skill_name, source_url, description=''):
     if not content.startswith('---'):
         return {'ok': False, 'error': '文件格式无效（缺少 YAML frontmatter）'}
     
-    # 尝试解析 frontmatter
+    # 验证 frontmatter 结构（先做字符串检查，再尝试 YAML 解析）
+    parts = content.split('---', 2)
+    if len(parts) < 3:
+        return {'ok': False, 'error': '文件格式无效（YAML frontmatter 结构错误）'}
+    if 'name:' not in content[:500]:
+        return {'ok': False, 'error': '文件格式无效：frontmatter 缺少 name 字段'}
     try:
         import yaml
-        parts = content.split('---', 2)
-        if len(parts) < 3:
-            return {'ok': False, 'error': '文件格式无效（YAML frontmatter 结构错误）'}
-        frontmatter_str = parts[1]
-        yaml.safe_load(frontmatter_str)  # 验证 YAML 格式
+        yaml.safe_load(parts[1])  # 严格校验 YAML 语法
+    except ImportError:
+        pass  # PyYAML 未安装，跳过严格验证，字符串检查已通过
     except Exception as e:
-        # 不要求完全的 YAML 解析，但要检查基本结构
-        if 'name:' not in content[:500]:
-            return {'ok': False, 'error': f'文件格式无效: {str(e)[:100]}'}
+        return {'ok': False, 'error': f'YAML 格式无效: {str(e)[:100]}'}
     
     # 创建本地目录
     workspace = OCLAW_HOME / f'workspace-{agent_id}' / 'skills' / skill_name
@@ -524,7 +520,7 @@ def push_to_feishu():
 
 
 # 旨意标题最低要求
-_MIN_TITLE_LEN = 10
+_MIN_TITLE_LEN = 6
 _JUNK_TITLES = {
     '?', '？', '好', '好的', '是', '否', '不', '不是', '对', '了解', '收到',
     '嗯', '哦', '知道了', '开启了么', '可以', '不行', '行', 'ok', 'yes', 'no',
@@ -893,8 +889,8 @@ def _ensure_scheduler(task):
         sched = {}
         task['_scheduler'] = sched
     sched.setdefault('enabled', True)
-    sched.setdefault('stallThresholdSec', 180)
-    sched.setdefault('maxRetry', 1)
+    sched.setdefault('stallThresholdSec', 600)
+    sched.setdefault('maxRetry', 2)
     sched.setdefault('retryCount', 0)
     sched.setdefault('escalationLevel', 0)
     sched.setdefault('autoRollback', True)
@@ -1065,8 +1061,8 @@ def handle_scheduler_rollback(task_id, reason=''):
     return {'ok': True, 'message': f'{task_id} 已回滚到 {snap_state}'}
 
 
-def handle_scheduler_scan(threshold_sec=180):
-    threshold_sec = max(30, int(threshold_sec or 180))
+def handle_scheduler_scan(threshold_sec=600):
+    threshold_sec = max(60, int(threshold_sec or 600))
     tasks = load_tasks()
     now_dt = datetime.datetime.now(datetime.timezone.utc)
     pending_retries = []
@@ -1956,8 +1952,11 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchTrigger': trigger,
                 }))
                 return
+            # Fix #139: dispatch channel 可配置（默认 feishu，支持 telegram/wecom/signal 等）
+            _agent_cfg = read_json(DATA / 'agent_config.json', {})
+            _channel = (_agent_cfg.get('dispatchChannel') or 'feishu').strip()
             cmd = ['openclaw', 'agent', '--agent', agent_id, '-m', msg,
-                   '--deliver', '--channel', 'feishu', '--timeout', '300']
+                   '--deliver', '--channel', _channel, '--timeout', '300']
             max_retries = 2
             err = ''
             for attempt in range(1, max_retries + 1):
@@ -2187,6 +2186,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': False, 'error': 'invalid agent_id'}, 400)
             else:
                 self.send_json({'ok': True, 'agentId': agent_id, 'activity': get_agent_activity(agent_id)})
+        # ── 朝堂议政 ──
+        elif p == '/api/court-discuss/list':
+            self.send_json({'ok': True, 'sessions': cd_list()})
+        elif p == '/api/court-discuss/officials':
+            self.send_json({'ok': True, 'officials': CD_PROFILES})
+        elif p.startswith('/api/court-discuss/session/'):
+            sid = p.replace('/api/court-discuss/session/', '')
+            data = cd_get(sid)
+            self.send_json(data if data else {'ok': False, 'error': 'session not found'}, 200 if data else 404)
+        elif p == '/api/court-discuss/fate':
+            self.send_json({'ok': True, 'event': cd_fate()})
         elif self._serve_static(p):
             pass  # 已由 _serve_static 处理 (JS/CSS/图片等)
         else:
@@ -2458,6 +2468,61 @@ class Handler(BaseHTTPRequestHandler):
 
             threading.Thread(target=apply_async, daemon=True).start()
             self.send_json({'ok': True, 'message': f'Queued: {agent_id} → {model}'})
+
+        # Fix #139: 设置派发渠道（feishu/telegram/wecom/signal/tui）
+        elif p == '/api/set-dispatch-channel':
+            channel = body.get('channel', '').strip()
+            allowed = {'feishu', 'telegram', 'wecom', 'signal', 'tui', 'discord', 'slack'}
+            if not channel or channel not in allowed:
+                self.send_json({'ok': False, 'error': f'channel must be one of: {", ".join(sorted(allowed))}'}, 400)
+                return
+            def _set_channel(cfg):
+                cfg['dispatchChannel'] = channel
+                return cfg
+            atomic_json_update(DATA / 'agent_config.json', _set_channel, {})
+            self.send_json({'ok': True, 'message': f'派发渠道已切换为 {channel}'})
+
+        # ── 朝堂议政 POST ──
+        elif p == '/api/court-discuss/start':
+            topic = body.get('topic', '').strip()
+            officials = body.get('officials', [])
+            task_id = body.get('taskId', '').strip()
+            if not topic:
+                self.send_json({'ok': False, 'error': 'topic required'}, 400)
+                return
+            if not officials or not isinstance(officials, list):
+                self.send_json({'ok': False, 'error': 'officials list required'}, 400)
+                return
+            # 校验官员 ID
+            valid_ids = set(CD_PROFILES.keys())
+            officials = [o for o in officials if o in valid_ids]
+            if len(officials) < 2:
+                self.send_json({'ok': False, 'error': '至少选择2位官员'}, 400)
+                return
+            self.send_json(cd_create(topic, officials, task_id))
+
+        elif p == '/api/court-discuss/advance':
+            sid = body.get('sessionId', '').strip()
+            user_msg = body.get('userMessage', '').strip() or None
+            decree = body.get('decree', '').strip() or None
+            if not sid:
+                self.send_json({'ok': False, 'error': 'sessionId required'}, 400)
+                return
+            self.send_json(cd_advance(sid, user_msg, decree))
+
+        elif p == '/api/court-discuss/conclude':
+            sid = body.get('sessionId', '').strip()
+            if not sid:
+                self.send_json({'ok': False, 'error': 'sessionId required'}, 400)
+                return
+            self.send_json(cd_conclude(sid))
+
+        elif p == '/api/court-discuss/destroy':
+            sid = body.get('sessionId', '').strip()
+            if sid:
+                cd_destroy(sid)
+            self.send_json({'ok': True})
+
         else:
             self.send_error(404)
 

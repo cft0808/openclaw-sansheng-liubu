@@ -53,7 +53,7 @@ def detect_official(agent_id):
         'xingbu':  ('刑部尚书', '刑部'),
         'gongbu':  ('工部尚书', '工部'),
         'libu_hr': ('吏部尚书', '吏部'),
-        'zaochao': ('钦天监', '朝报司'),
+        'zaochao': ('钦天监', '钦天监'),
     }
     return mapping.get(agent_id, ('尚书令', '尚书省'))
 
@@ -291,13 +291,11 @@ def main():
                 if t.get('state') != 'Blocked':
                     continue
 
-            # 3. 排除非活跃的 OC 会话 (超过 5 分钟无响应)，避免污染看板
-            # 除非它是 Blocked (报错)，或者是今天新建的
+            # 3. 排除已冷却的 OC 会话，避免污染看板
+            # 保留 Doing（<2min）、Review（<60min）、Blocked（报错）
+            # 仅过滤掉 Next（>60min 无响应）等已结束/闲置的会话
             state = t.get('state')
-            # state_from_session: < 2min = Doing, < 60min = Review, else = Next
-            if state not in ('Doing', 'Blocked'):
-                # 如果不是正在进行或报错，就隐藏掉
-                # 特例: 如果是 mission control (mc-) 的心跳，可能也没必要显示，除非 Doing
+            if state not in ('Doing', 'Review', 'Blocked'):
                 continue
 
             filtered_tasks.append(t)

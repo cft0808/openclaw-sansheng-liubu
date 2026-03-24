@@ -20,6 +20,7 @@ import sys
 import json
 import pathlib
 import argparse
+import os
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -217,13 +218,31 @@ def remove_remote(agent_id: str, name: str) -> bool:
         return False
 
 
+OFFICIAL_SKILLS_HUB_BASE = 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main'
+# 备用镜像（GitHub 国内访问不稳定时自动切换）
+_FALLBACK_HUB_BASES = [
+    'https://ghproxy.com/https://raw.githubusercontent.com/openclaw-ai/skills-hub/main',
+    'https://raw.gitmirror.com/openclaw-ai/skills-hub/main',
+]
+
+# 支持通过环境变量覆盖 Hub 地址
+_HUB_BASE_ENV = 'OPENCLAW_SKILLS_HUB_BASE'
+
+def _get_hub_url(skill_name):
+    """获取 skill 的 Hub URL，支持环境变量覆盖"""
+    base = (Path.home() / '.openclaw' / 'skills-hub-url').read_text().strip() \
+        if (Path.home() / '.openclaw' / 'skills-hub-url').exists() else None
+    base = base or os.environ.get(_HUB_BASE_ENV) or OFFICIAL_SKILLS_HUB_BASE
+    return f'{base.rstrip("/")}/{skill_name}/SKILL.md'
+
+
 OFFICIAL_SKILLS_HUB = {
-    'code_review': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/code_review/SKILL.md',
-    'api_design': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/api_design/SKILL.md',
-    'security_audit': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/security_audit/SKILL.md',
-    'data_analysis': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/data_analysis/SKILL.md',
-    'doc_generation': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/doc_generation/SKILL.md',
-    'test_framework': 'https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/test_framework/SKILL.md',
+    'code_review': _get_hub_url('code_review'),
+    'api_design': _get_hub_url('api_design'),
+    'security_audit': _get_hub_url('security_audit'),
+    'data_analysis': _get_hub_url('data_analysis'),
+    'doc_generation': _get_hub_url('doc_generation'),
+    'test_framework': _get_hub_url('test_framework'),
 }
 
 SKILL_AGENT_MAPPING = {
@@ -259,9 +278,21 @@ def import_official_hub(agent_ids: list) -> bool:
         print(f'\n📥 正在导入 skill: {skill_name}')
         print(f'   目标 agents: {", ".join(target_agents)}')
         
+        # 尝试主 URL，失败则自动切换镜像
+        effective_url = url
         for agent_id in target_agents:
             total += 1
-            if add_remote(agent_id, skill_name, url, f'官方 skill：{skill_name}'):
+            ok = add_remote(agent_id, skill_name, effective_url, f'官方 skill：{skill_name}')
+            if not ok and effective_url == url:
+                # 主 URL 失败，尝试镜像
+                for fb_base in _FALLBACK_HUB_BASES:
+                    fb_url = f'{fb_base.rstrip("/")}/{skill_name}/SKILL.md'
+                    print(f'   🔄 尝试镜像: {fb_url}')
+                    ok = add_remote(agent_id, skill_name, fb_url, f'官方 skill：{skill_name}')
+                    if ok:
+                        effective_url = fb_url  # 后续 agent 也用这个镜像
+                        break
+            if ok:
                 success += 1
             else:
                 failed.append(f'{agent_id}/{skill_name}')
@@ -272,9 +303,11 @@ def import_official_hub(agent_ids: list) -> bool:
         for f in failed:
             print(f'   - {f}')
         print(f'\n💡 排查建议:')
-        print(f'   1. 检查网络: curl -I https://raw.githubusercontent.com/openclaw-ai/skills-hub/main/code_review/SKILL.md')
+        print(f'   1. 检查网络: curl -I {OFFICIAL_SKILLS_HUB_BASE}/code_review/SKILL.md')
         print(f'   2. 设置代理: export https_proxy=http://your-proxy:port')
-        print(f'   3. 单独重试: python3 scripts/skill_manager.py add-remote --agent <agent> --name <skill> --source <url>')
+        print(f'   3. 使用镜像: export {_HUB_BASE_ENV}=https://ghproxy.com/{OFFICIAL_SKILLS_HUB_BASE}')
+        print(f'   4. 自定义源: echo "https://your-mirror/skills" > ~/.openclaw/skills-hub-url')
+        print(f'   5. 单独重试: python3 scripts/skill_manager.py add-remote --agent <agent> --name <skill> --source <url>')
     return success == total
 
 

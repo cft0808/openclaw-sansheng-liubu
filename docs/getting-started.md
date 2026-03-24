@@ -134,6 +134,28 @@ open http://127.0.0.1:7891
 python3 dashboard/server.py
 ```
 
+### Agent 报错 "No API key found for provider"
+
+这是最常见的问题。三省六部有 11 个 Agent，每个都需要 API Key。
+
+```bash
+# 方法一：为任意 Agent 配置后重新运行 install.sh（推荐）
+openclaw agents add taizi          # 按提示输入 Anthropic API Key
+cd edict && ./install.sh            # 自动同步到所有 Agent
+
+# 方法二：手动复制 auth 文件
+MAIN_AUTH=$(find ~/.openclaw/agents -name auth-profiles.json | head -1)
+for agent in taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu; do
+  mkdir -p ~/.openclaw/agents/$agent/agent
+  cp "$MAIN_AUTH" ~/.openclaw/agents/$agent/agent/auth-profiles.json
+done
+
+# 方法三：逐个配置
+openclaw agents add taizi
+openclaw agents add zhongshu
+# ... 其他 Agent
+```
+
 ### Agent 不响应
 ```bash
 # 检查 Gateway 状态
