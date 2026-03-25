@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 OCLAW_HOME = pathlib.Path.home() / '.openclaw'
 MAX_REQUEST_BODY = 1 * 1024 * 1024  # 1 MB
 ALLOWED_ORIGIN = None  # Set via --cors; None means restrict to localhost
+_DASHBOARD_PORT = 7891  # Updated at startup from --port arg
 _DEFAULT_ORIGINS = {
     'http://127.0.0.1:7891', 'http://localhost:7891',
     'http://127.0.0.1:5173', 'http://localhost:5173',  # Vite dev server
@@ -71,7 +72,7 @@ def cors_headers(h):
     elif req_origin in _DEFAULT_ORIGINS:
         origin = req_origin
     else:
-        origin = 'http://127.0.0.1:7891'
+        origin = f'http://127.0.0.1:{_DASHBOARD_PORT}'
     h.send_header('Access-Control-Allow-Origin', origin)
     h.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     h.send_header('Access-Control-Allow-Headers', 'Content-Type')
@@ -2534,8 +2535,12 @@ def main():
     parser.add_argument('--cors', default=None, help='Allowed CORS origin (default: reflect request Origin header)')
     args = parser.parse_args()
 
-    global ALLOWED_ORIGIN
+    global ALLOWED_ORIGIN, _DASHBOARD_PORT, _DEFAULT_ORIGINS
     ALLOWED_ORIGIN = args.cors
+    _DASHBOARD_PORT = args.port
+    _DEFAULT_ORIGINS = _DEFAULT_ORIGINS | {
+        f'http://127.0.0.1:{args.port}', f'http://localhost:{args.port}',
+    }
 
     server = HTTPServer((args.host, args.port), Handler)
     log.info(f'三省六部看板启动 → http://{args.host}:{args.port}')

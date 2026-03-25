@@ -22,9 +22,9 @@ ID_LABEL = {
     'shangshu': {'label': '尚书省', 'role': '尚书令',   'duty': '派单与升级裁决',      'emoji': '📮'},
     'libu':     {'label': '礼部',   'role': '礼部尚书', 'duty': '文档/汇报/规范',      'emoji': '📝'},
     'hubu':     {'label': '户部',   'role': '户部尚书', 'duty': '资源/预算/成本',      'emoji': '💰'},
-    'bingbu':   {'label': '兵部',   'role': '兵部尚书', 'duty': '应急与巡检',          'emoji': '⚔️'},
+    'bingbu':   {'label': '兵部',   'role': '兵部尚书', 'duty': '工程实现与架构设计',  'emoji': '⚔️'},
     'xingbu':   {'label': '刑部',   'role': '刑部尚书', 'duty': '合规/审计/红线',      'emoji': '⚖️'},
-    'gongbu':   {'label': '工部',   'role': '工部尚书', 'duty': '工程交付与自动化',    'emoji': '🔧'},
+    'gongbu':   {'label': '工部',   'role': '工部尚书', 'duty': '基础设施与部署运维',  'emoji': '🔧'},
     'libu_hr':  {'label': '吏部',   'role': '吏部尚书', 'duty': '人事/培训/Agent管理',  'emoji': '👔'},
     'zaochao':  {'label': '钦天监', 'role': '朝报官',   'duty': '每日新闻采集与简报',  'emoji': '📰'},
 }
@@ -128,6 +128,10 @@ def main():
             continue
         meta = ID_LABEL[ag_id]
         workspace = ag.get('workspace', str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}'))
+        if 'allowAgents' in ag:
+            allow_agents = ag.get('allowAgents', []) or []
+        else:
+            allow_agents = ag.get('subagents', {}).get('allowAgents', [])
         result.append({
             'id': ag_id,
             'label': meta['label'], 'role': meta['role'], 'duty': meta['duty'], 'emoji': meta['emoji'],
@@ -135,7 +139,7 @@ def main():
             'defaultModel': default_model,
             'workspace': workspace,
             'skills': get_skills(workspace),
-            'allowAgents': ag.get('subagents', {}).get('allowAgents', []),
+            'allowAgents': allow_agents,
         })
         seen_ids.add(ag_id)
 
