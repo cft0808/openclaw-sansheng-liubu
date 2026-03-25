@@ -304,15 +304,34 @@ setup_visibility() {
 sync_auth() {
   info "同步 API Key 到所有 Agent..."
 
-  # 找到 main agent 的 auth-profiles.json（OpenClaw 主密钥存储）
-  MAIN_AUTH="$OC_HOME/agents/main/agent/auth-profiles.json"
-  if [ ! -f "$MAIN_AUTH" ]; then
-    # 尝试其他可能的位置
-    MAIN_AUTH=$(find "$OC_HOME/agents" -name auth-profiles.json -maxdepth 3 2>/dev/null | head -1)
+  # OpenClaw ≥ 3.13 stores credentials in models.json; older versions use
+  # auth-profiles.json. Try the new name first, then fall back to the old one.
+  MAIN_AUTH=""
+  AUTH_FILENAME=""
+  AGENT_BASE="$OC_HOME/agents/main/agent"
+
+  for candidate in models.json auth-profiles.json; do
+    if [ -f "$AGENT_BASE/$candidate" ]; then
+      MAIN_AUTH="$AGENT_BASE/$candidate"
+      AUTH_FILENAME="$candidate"
+      break
+    fi
+  done
+
+  # Fallback: search across all agents for either filename
+  if [ -z "$MAIN_AUTH" ]; then
+    for candidate in models.json auth-profiles.json; do
+      MAIN_AUTH=$(find "$OC_HOME/agents" -name "$candidate" -maxdepth 3 2>/dev/null | head -1)
+      if [ -n "$MAIN_AUTH" ] && [ -f "$MAIN_AUTH" ]; then
+        AUTH_FILENAME="$candidate"
+        break
+      fi
+      MAIN_AUTH=""
+    done
   fi
 
   if [ -z "$MAIN_AUTH" ] || [ ! -f "$MAIN_AUTH" ]; then
-    warn "未找到已有的 auth-profiles.json"
+    warn "未找到已有的 models.json 或 auth-profiles.json"
     warn "请先为任意 Agent 配置 API Key:"
     echo "    openclaw agents add taizi"
     echo "  然后重新运行 install.sh，或手动执行:"
@@ -322,7 +341,7 @@ sync_auth() {
 
   # 检查文件内容是否有效（非空 JSON）
   if ! python3 -c "import json; d=json.load(open('$MAIN_AUTH')); assert d" 2>/dev/null; then
-    warn "auth-profiles.json 为空或无效，请先配置 API Key:"
+    warn "$AUTH_FILENAME 为空或无效，请先配置 API Key:"
     echo "    openclaw agents add taizi"
     return
   fi
@@ -332,7 +351,7 @@ sync_auth() {
   for agent in "${AGENTS[@]}"; do
     AGENT_DIR="$OC_HOME/agents/$agent/agent"
     if [ -d "$AGENT_DIR" ] || mkdir -p "$AGENT_DIR" 2>/dev/null; then
-      cp "$MAIN_AUTH" "$AGENT_DIR/auth-profiles.json"
+      cp "$MAIN_AUTH" "$AGENT_DIR/$AUTH_FILENAME"
       SYNCED=$((SYNCED + 1))
     fi
   done
