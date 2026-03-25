@@ -13,12 +13,47 @@
         return tasks 
     atomic_json_update(path, modifier, default=[])
 """
-import fcntl
 import json
 import os
 import pathlib
 import tempfile
 from typing import Any, Callable
+
+_IS_WINDOWS = os.name == 'nt'
+
+if _IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+
+
+# ── 平台抽象：文件锁 ────────────────────────────────────────────
+
+def _lock_shared(fd: int) -> None:
+    """获取共享锁（读锁）。"""
+    if _IS_WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+
+
+def _lock_exclusive(fd: int) -> None:
+    """获取排他锁（写锁）。"""
+    if _IS_WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def _unlock(fd: int) -> None:
+    """释放锁。"""
+    if _IS_WINDOWS:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def _lock_path(path: pathlib.Path) -> pathlib.Path:
@@ -31,13 +66,13 @@ def atomic_json_read(path: pathlib.Path, default: Any = None) -> Any:
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
     try:
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        _lock_shared(fd)
         try:
             return json.loads(path.read_text()) if path.exists() else default
         except Exception:
             return default
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _unlock(fd)
         os.close(fd)
 
 
@@ -55,7 +90,7 @@ def atomic_json_update(
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _lock_exclusive(fd)
         # Read
         try:
             data = json.loads(path.read_text()) if path.exists() else default
@@ -76,7 +111,7 @@ def atomic_json_update(
             raise
         return result
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _unlock(fd)
         os.close(fd)
 
 

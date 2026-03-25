@@ -65,13 +65,22 @@ def main():
             errors.append({'change': change, 'error': f'agent {ag_id} not found'})
 
     if applied:
-        bak = OPENCLAW_CFG.parent / f'openclaw.json.bak.model-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
-        shutil.copy2(OPENCLAW_CFG, bak)
-        cleanup_backups()
-        cfg['agents']['list'] = agents_list
-        atomic_json_write(OPENCLAW_CFG, cfg)
+        # 只有内容真正变化时才备份和写入
+        new_cfg = dict(cfg)
+        new_cfg['agents'] = dict(cfg.get('agents', {}))
+        new_cfg['agents']['list'] = agents_list
+        old_text = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
+        new_text = json.dumps(new_cfg, ensure_ascii=False, sort_keys=True)
+        if old_text != new_text:
+            bak = OPENCLAW_CFG.parent / f'openclaw.json.bak.model-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
+            shutil.copy2(OPENCLAW_CFG, bak)
+            cleanup_backups()
+            atomic_json_write(OPENCLAW_CFG, new_cfg)
+        cfg = new_cfg
 
         log_data = rj(CHANGE_LOG, [])
+        if not isinstance(log_data, list):
+            log_data = []
         log_data.extend(applied)
         if len(log_data) > 200:
             log_data = log_data[-200:]

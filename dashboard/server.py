@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 OCLAW_HOME = pathlib.Path.home() / '.openclaw'
 MAX_REQUEST_BODY = 1 * 1024 * 1024  # 1 MB
 ALLOWED_ORIGIN = None  # Set via --cors; None means restrict to localhost
+_DASHBOARD_PORT = 7891  # Updated at startup from --port arg
 _DEFAULT_ORIGINS = {
     'http://127.0.0.1:7891', 'http://localhost:7891',
     'http://127.0.0.1:5173', 'http://localhost:5173',  # Vite dev server
@@ -71,7 +72,7 @@ def cors_headers(h):
     elif req_origin in _DEFAULT_ORIGINS:
         origin = req_origin
     else:
-        origin = 'http://127.0.0.1:7891'
+        origin = f'http://127.0.0.1:{_DASHBOARD_PORT}'
     h.send_header('Access-Control-Allow-Origin', origin)
     h.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     h.send_header('Access-Control-Allow-Headers', 'Content-Type')
@@ -1952,8 +1953,11 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchTrigger': trigger,
                 }))
                 return
+            # Fix #139: dispatch channel 可配置（默认 feishu，支持 telegram/wecom/signal 等）
+            _agent_cfg = read_json(DATA / 'agent_config.json', {})
+            _channel = (_agent_cfg.get('dispatchChannel') or 'feishu').strip()
             cmd = ['openclaw', 'agent', '--agent', agent_id, '-m', msg,
-                   '--deliver', '--channel', 'feishu', '--timeout', '300']
+                   '--deliver', '--channel', _channel, '--timeout', '300']
             max_retries = 2
             err = ''
             for attempt in range(1, max_retries + 1):
@@ -2466,6 +2470,19 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=apply_async, daemon=True).start()
             self.send_json({'ok': True, 'message': f'Queued: {agent_id} → {model}'})
 
+        # Fix #139: 设置派发渠道（feishu/telegram/wecom/signal/tui）
+        elif p == '/api/set-dispatch-channel':
+            channel = body.get('channel', '').strip()
+            allowed = {'feishu', 'telegram', 'wecom', 'signal', 'tui', 'discord', 'slack'}
+            if not channel or channel not in allowed:
+                self.send_json({'ok': False, 'error': f'channel must be one of: {", ".join(sorted(allowed))}'}, 400)
+                return
+            def _set_channel(cfg):
+                cfg['dispatchChannel'] = channel
+                return cfg
+            atomic_json_update(DATA / 'agent_config.json', _set_channel, {})
+            self.send_json({'ok': True, 'message': f'派发渠道已切换为 {channel}'})
+
         # ── 朝堂议政 POST ──
         elif p == '/api/court-discuss/start':
             topic = body.get('topic', '').strip()
@@ -2518,8 +2535,12 @@ def main():
     parser.add_argument('--cors', default=None, help='Allowed CORS origin (default: reflect request Origin header)')
     args = parser.parse_args()
 
-    global ALLOWED_ORIGIN
+    global ALLOWED_ORIGIN, _DASHBOARD_PORT, _DEFAULT_ORIGINS
     ALLOWED_ORIGIN = args.cors
+    _DASHBOARD_PORT = args.port
+    _DEFAULT_ORIGINS = _DEFAULT_ORIGINS | {
+        f'http://127.0.0.1:{args.port}', f'http://localhost:{args.port}',
+    }
 
     server = HTTPServer((args.host, args.port), Handler)
     log.info(f'三省六部看板启动 → http://{args.host}:{args.port}')

@@ -41,7 +41,7 @@ class TaskService:
         assignee_org: str | None = None,
         creator: str = "emperor",
         tags: list[str] | None = None,
-        initial_state: TaskState = TaskState.TAIZI,
+        initial_state: TaskState = TaskState.Taizi,
         meta: dict | None = None,
     ) -> Task:
         """创建任务并发布 task.created 事件。"""

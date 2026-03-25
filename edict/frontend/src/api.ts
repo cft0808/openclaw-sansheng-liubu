@@ -49,6 +49,8 @@ export const api = {
   // 操作类
   setModel: (agentId: string, model: string) =>
     postJ<ActionResult>(`${API_BASE}/api/set-model`, { agentId, model }),
+  setDispatchChannel: (channel: string) =>
+    postJ<ActionResult>(`${API_BASE}/api/set-dispatch-channel`, { channel }),
   agentWake: (agentId: string) =>
     postJ<ActionResult>(`${API_BASE}/api/agent-wake`, { agentId }),
   taskAction: (taskId: string, action: string, reason: string) =>
@@ -190,6 +192,7 @@ export interface KnownModel {
 export interface AgentConfig {
   agents: AgentInfo[];
   knownModels?: KnownModel[];
+  dispatchChannel?: string;
 }
 
 export interface ChangeLogEntry {
