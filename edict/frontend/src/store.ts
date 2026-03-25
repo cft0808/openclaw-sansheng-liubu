@@ -66,7 +66,7 @@ export function isSession(t: Task): boolean {
 }
 
 export function isArchived(t: Task): boolean {
-  return t.archived || ['Done', 'Cancelled'].includes(t.state);
+  return !!t.archived;
 }
 
 export type PipeStatus = { key: string; dept: string; icon: string; action: string; status: 'done' | 'active' | 'pending' };
