@@ -39,9 +39,9 @@ class Settings(BaseSettings):
     heartbeat_interval_sec: int = 30
     scheduler_scan_interval_seconds: int = 60
 
-    # ── 飞书 ──
-    feishu_deliver: bool = True
-    feishu_channel: str = "feishu"
+    # ── 消息通知 ──
+    notification_enabled: bool = True
+    default_dispatch_channel: str = "feishu"
 
     @property
     def database_url(self) -> str:
