@@ -11,7 +11,7 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -667,8 +667,17 @@ _AGENT_DEPTS = [
 
 
 def _check_gateway_alive():
-    """检测 Gateway 进程是否在运行。"""
+    """检测 Gateway 是否在运行。
+
+    Windows 上不要依赖 pgrep；优先通过本地端口探测判断。
+    """
+    if _check_gateway_probe():
+        return True
     try:
+        if os.name == 'nt':
+            with socket.create_connection(('127.0.0.1', 18789), timeout=2):
+                return True
+            return False
         result = subprocess.run(['pgrep', '-f', 'openclaw-gateway'],
                                 capture_output=True, text=True, timeout=5)
         return result.returncode == 0
@@ -678,12 +687,15 @@ def _check_gateway_alive():
 
 def _check_gateway_probe():
     """通过 HTTP probe 检测 Gateway 是否响应。"""
-    try:
-        from urllib.request import urlopen
-        resp = urlopen('http://127.0.0.1:18789/', timeout=3)
-        return resp.status == 200
-    except Exception:
-        return False
+    for url in ('http://127.0.0.1:18789/', 'http://127.0.0.1:18789/healthz'):
+        try:
+            from urllib.request import urlopen
+            resp = urlopen(url, timeout=3)
+            if 200 <= resp.status < 500:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _get_agent_session_status(agent_id):

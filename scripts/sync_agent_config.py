@@ -110,7 +110,7 @@ def _collect_openclaw_models(cfg):
 def main():
     cfg = {}
     try:
-        cfg = json.loads(OPENCLAW_CFG.read_text())
+        cfg = json.loads(OPENCLAW_CFG.read_text(encoding='utf-8'))
     except Exception as e:
         log.warning(f'cannot read openclaw.json: {e}')
         return
@@ -174,7 +174,7 @@ def main():
     cfg_path = DATA / 'agent_config.json'
     if cfg_path.exists():
         try:
-            existing_cfg = json.loads(cfg_path.read_text())
+            existing_cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
         except Exception:
             pass
 

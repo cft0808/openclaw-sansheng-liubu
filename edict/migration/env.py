@@ -20,10 +20,15 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+from app.config import get_settings
 from app.models import Task, Event, Thought, Todo  # noqa
 from app.db import Base
 
 target_metadata = Base.metadata
+settings = get_settings()
+
+# Alembic 默认回退到本地配置，但运行时优先使用 Settings / DATABASE_URL。
+config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 
 
 def run_migrations_offline() -> None:
@@ -47,8 +52,11 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
+    config_section = config.get_section(config.config_ini_section, {})
+    config_section["sqlalchemy.url"] = settings.database_url
+
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        config_section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

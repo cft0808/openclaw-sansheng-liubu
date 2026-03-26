@@ -200,3 +200,7 @@ async def run_orchestrator():
         loop.add_signal_handler(sig, lambda: asyncio.create_task(worker.stop()))
 
     await worker.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_orchestrator())
