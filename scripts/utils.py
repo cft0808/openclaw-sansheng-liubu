@@ -9,7 +9,7 @@ import json, pathlib, datetime
 def read_json(path, default=None):
     """安全读取 JSON 文件，失败返回 default"""
     try:
-        return json.loads(pathlib.Path(path).read_text())
+        return json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
     except Exception:
         return default if default is not None else {}
 

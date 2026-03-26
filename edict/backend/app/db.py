@@ -28,11 +28,14 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncSession:
-    """FastAPI 依赖注入 — 获取异步数据库 session。"""
+    """FastAPI 依赖注入 — 获取异步数据库 session。
+
+    提交策略：由服务层显式 commit/flush 控制，
+    此处仅负责异常时 rollback，避免双重提交。
+    """
     async with async_session() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise

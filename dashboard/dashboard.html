@@ -940,8 +940,8 @@ function stateLabel(t){
 function isEdict(t){ return /^JJC-/i.test(t.id||'') }
 // 系统会话：OC-* / MC-* 开头
 function isSession(t){ return /^(OC-|MC-)/i.test(t.id||'') }
-// 归档判定：Done/Cancelled 或手动标记 archived
-function isArchived(t){ return t.archived || ['Done','Cancelled'].includes(t.state) }
+// 归档判定：仅检查显式 archived 标记（Done/Cancelled 留在活跃视图，等用户手动归档）
+function isArchived(t){ return !!t.archived }
 let edictFilter = 'active';  // 'active' | 'archived' | 'all'
 function setEdictFilter(f){
   edictFilter = f;
@@ -1150,7 +1150,7 @@ function renderMonitor(tasks){
     {id:'xingbu',  label:'刑部',  emoji:'⚖️',role:'刑部尚书',rank:'正二品'},
     {id:'gongbu',  label:'工部',  emoji:'🔧',role:'工部尚书',rank:'正二品'},
     {id:'libu_hr', label:'吏部',  emoji:'👔',role:'吏部尚书',rank:'正二品'},
-    {id:'zaochao', label:'钦天监',emoji:'🌟',role:'朝报官',  rank:'正三品'},
+    {id:'zaochao', label:'钦天监',emoji:'📰',role:'朝报官',  rank:'正三品'},
   ];
 
   // 每个部门当前承接的旨意：从 JJC 任务里找 org 匹配且非 Done 的

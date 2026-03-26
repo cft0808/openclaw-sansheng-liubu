@@ -62,9 +62,6 @@ git push origin feat/my-awesome-feature
 # 安装
 ./install.sh
 
-# 构建前端（首次或前端代码变更后）
-cd edict/frontend && npm install && npm run build && cd ../..
-
 # 启动数据刷新（后台运行）
 bash scripts/run_loop.sh &
 
@@ -75,19 +72,19 @@ python3 dashboard/server.py
 open http://127.0.0.1:7891
 ```
 
-> 💡 **前端开发模式**：`cd edict/frontend && npm run dev` → http://localhost:5173（热重载，自动代理 API 到 7891）
+> 💡 **看板开箱即用**：`server.py` 内嵌 `dashboard/dashboard.html`，Docker 镜像包含预构建 React 前端
 
 ### 项目结构速览
 
 | 目录/文件 | 说明 | 改动频率 |
-|----------|------|---------|
-| `edict/frontend/src/components/` | 看板前端组件（React 18 + TypeScript） | 🔥 高 |
-| `edict/frontend/src/index.css` | CSS 样式（CSS 变量主题） | 🔥 高 |
+|----------|------|--------|
+| `dashboard/dashboard.html` | 看板前端（单文件，零依赖，开箱即用） | 🔥 高 |
 | `dashboard/server.py` | API 服务器（stdlib，~2200 行） | 🔥 高 |
 | `agents/*/SOUL.md` | 12 个 Agent 人格模板 | 🔶 中 |
-| `scripts/kanban_update.py` | 看板 CLI + 数据清洗（~300 行） | 🔶 中 |
+| `dashboard/court_discuss.py` | 朝堂议政引擎（多官员 LLM 讨论） | 🔶 中 |
+| `scripts/kanban_update.py` | 看板 CLI + 数据清洗 + 状态机校验（~350 行） | 🔶 中 |
 | `scripts/*.py` | 数据同步 / 自动化脚本 | 🔶 中 |
-| `tests/test_e2e_kanban.py` | E2E 看板测试（17 断言） | 🔶 中 |
+| `tests/test_e2e_kanban.py` | E2E 看板测试（24 断言） | 🔶 中 |
 | `install.sh` | 安装脚本 | 🟢 低 |
 
 ---
@@ -158,9 +155,6 @@ docs: 更新 README 截图
 # 编译检查
 python3 -m py_compile dashboard/server.py
 python3 -m py_compile scripts/kanban_update.py
-
-# 前端类型检查 + 构建
-cd edict/frontend && npx tsc -b && npm run build && cd ../..
 
 # E2E 看板测试（9 场景 17 断言）
 python3 tests/test_e2e_kanban.py

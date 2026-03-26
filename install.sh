@@ -165,6 +165,19 @@ for ag in AGENTS:
         print(f'  ~ exists: {ag_id} (skipped)')
 
 agents_cfg['list'] = agents_list
+
+# Fix #142: 清理 bindings 中的非法字段（pattern 不被 gateway 支持）
+bindings = cfg.get('bindings', [])
+cleaned = 0
+for b in bindings:
+    match = b.get('match', {})
+    if isinstance(match, dict) and 'pattern' in match:
+        del match['pattern']
+        cleaned += 1
+        print(f'  🧹 cleaned invalid "pattern" from binding: {b.get("agentId", "?")}')
+if cleaned:
+    print(f'Cleaned {cleaned} invalid binding field(s)')
+
 cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
 print(f'Done: {added} agents added')
 PYEOF
@@ -211,8 +224,6 @@ tasks = [
         ]
     }
 ]
-p = pathlib.Path(__file__).parent if '__file__' in dir() else pathlib.Path('.')
-# Write to data dir
 import os
 data_dir = pathlib.Path(os.environ.get('REPO_DIR', '.')) / 'data'
 data_dir.mkdir(exist_ok=True)
@@ -222,6 +233,131 @@ PYEOF
   fi
 
   log "数据目录初始化完成: $REPO_DIR/data"
+}
+
+# ── Step 3.3: 创建 data 软链接确保数据一致 (Fix #88) ─────────
+link_resources() {
+  info "创建 data/scripts 软链接以确保 Agent 数据一致..."
+  
+  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+  LINKED=0
+  for agent in "${AGENTS[@]}"; do
+    ws="$OC_HOME/workspace-$agent"
+    mkdir -p "$ws"
+
+    # 软链接 data 目录：确保各 agent 读写同一份 tasks_source.json
+    ws_data="$ws/data"
+    if [ -L "$ws_data" ]; then
+      : # 已是软链接，跳过
+    elif [ -d "$ws_data" ]; then
+      # 已有 data 目录（非符号链接），备份后替换
+      mv "$ws_data" "${ws_data}.bak.$(date +%Y%m%d-%H%M%S)"
+      ln -s "$REPO_DIR/data" "$ws_data"
+      LINKED=$((LINKED + 1))
+    else
+      ln -s "$REPO_DIR/data" "$ws_data"
+      LINKED=$((LINKED + 1))
+    fi
+
+    # 软链接 scripts 目录
+    ws_scripts="$ws/scripts"
+    if [ -L "$ws_scripts" ]; then
+      : # 已是软链接
+    elif [ -d "$ws_scripts" ]; then
+      mv "$ws_scripts" "${ws_scripts}.bak.$(date +%Y%m%d-%H%M%S)"
+      ln -s "$REPO_DIR/scripts" "$ws_scripts"
+      LINKED=$((LINKED + 1))
+    else
+      ln -s "$REPO_DIR/scripts" "$ws_scripts"
+      LINKED=$((LINKED + 1))
+    fi
+  done
+
+  # Legacy: workspace-main
+  ws_main="$OC_HOME/workspace-main"
+  if [ -d "$ws_main" ]; then
+    for target in data scripts; do
+      link_path="$ws_main/$target"
+      if [ ! -L "$link_path" ]; then
+        [ -d "$link_path" ] && mv "$link_path" "${link_path}.bak.$(date +%Y%m%d-%H%M%S)"
+        ln -s "$REPO_DIR/$target" "$link_path"
+        LINKED=$((LINKED + 1))
+      fi
+    done
+  fi
+
+  log "已创建 $LINKED 个软链接（data/scripts → 项目目录）"
+}
+
+# ── Step 3.5: 设置 Agent 间通信可见性 (Fix #83) ──────────────
+setup_visibility() {
+  info "配置 Agent 间消息可见性..."
+  if openclaw config set tools.sessions.visibility all 2>/dev/null; then
+    log "已设置 tools.sessions.visibility=all（Agent 间可互相通信）"
+  else
+    warn "设置 visibility 失败（可能 openclaw 版本不支持），请手动执行:"
+    echo "    openclaw config set tools.sessions.visibility all"
+  fi
+}
+
+# ── Step 3.5b: 同步 API Key 到所有 Agent ──────────────────────────
+sync_auth() {
+  info "同步 API Key 到所有 Agent..."
+
+  # OpenClaw ≥ 3.13 stores credentials in models.json; older versions use
+  # auth-profiles.json. Try the new name first, then fall back to the old one.
+  MAIN_AUTH=""
+  AUTH_FILENAME=""
+  AGENT_BASE="$OC_HOME/agents/main/agent"
+
+  for candidate in models.json auth-profiles.json; do
+    if [ -f "$AGENT_BASE/$candidate" ]; then
+      MAIN_AUTH="$AGENT_BASE/$candidate"
+      AUTH_FILENAME="$candidate"
+      break
+    fi
+  done
+
+  # Fallback: search across all agents for either filename
+  if [ -z "$MAIN_AUTH" ]; then
+    for candidate in models.json auth-profiles.json; do
+      MAIN_AUTH=$(find "$OC_HOME/agents" -name "$candidate" -maxdepth 3 2>/dev/null | head -1)
+      if [ -n "$MAIN_AUTH" ] && [ -f "$MAIN_AUTH" ]; then
+        AUTH_FILENAME="$candidate"
+        break
+      fi
+      MAIN_AUTH=""
+    done
+  fi
+
+  if [ -z "$MAIN_AUTH" ] || [ ! -f "$MAIN_AUTH" ]; then
+    warn "未找到已有的 models.json 或 auth-profiles.json"
+    warn "请先为任意 Agent 配置 API Key:"
+    echo "    openclaw agents add taizi"
+    echo "  然后重新运行 install.sh，或手动执行:"
+    echo "    bash install.sh --sync-auth"
+    return
+  fi
+
+  # 检查文件内容是否有效（非空 JSON）
+  if ! python3 -c "import json; d=json.load(open('$MAIN_AUTH')); assert d" 2>/dev/null; then
+    warn "$AUTH_FILENAME 为空或无效，请先配置 API Key:"
+    echo "    openclaw agents add taizi"
+    return
+  fi
+
+  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+  SYNCED=0
+  for agent in "${AGENTS[@]}"; do
+    AGENT_DIR="$OC_HOME/agents/$agent/agent"
+    if [ -d "$AGENT_DIR" ] || mkdir -p "$AGENT_DIR" 2>/dev/null; then
+      cp "$MAIN_AUTH" "$AGENT_DIR/$AUTH_FILENAME"
+      SYNCED=$((SYNCED + 1))
+    fi
+  done
+
+  log "API Key 已同步到 $SYNCED 个 Agent"
+  info "来源: $MAIN_AUTH"
 }
 
 # ── Step 4: 构建前端 ──────────────────────────────────────────
@@ -255,6 +391,7 @@ first_sync() {
   cd "$REPO_DIR"
   
   REPO_DIR="$REPO_DIR" python3 scripts/sync_agent_config.py || warn "sync_agent_config 有警告"
+  python3 scripts/sync_officials_stats.py || warn "sync_officials_stats 有警告"
   python3 scripts/refresh_live_data.py || warn "refresh_live_data 有警告"
   
   log "首次同步完成"
@@ -277,6 +414,9 @@ backup_existing
 create_workspaces
 register_agents
 init_data
+link_resources
+setup_visibility
+sync_auth
 build_frontend
 first_sync
 restart_gateway
@@ -287,8 +427,12 @@ echo -e "${GREEN}║  🎉  三省六部安装完成！                         
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "下一步："
-echo "  1. 启动数据刷新循环:  bash scripts/run_loop.sh &"
-echo "  2. 启动看板服务器:    python3 dashboard/server.py"
-echo "  3. 打开看板:          http://127.0.0.1:7891"
+echo "  1. 配置 API Key（如尚未配置）:"
+echo "     openclaw agents add taizi     # 按提示输入 Anthropic API Key"
+echo "     ./install.sh                  # 重新运行以同步到所有 Agent"
+echo "  2. 启动数据刷新循环:  bash scripts/run_loop.sh &"
+echo "  3. 启动看板服务器:    python3 dashboard/server.py"
+echo "  4. 打开看板:          http://127.0.0.1:7891"
 echo ""
+warn "首次安装必须配置 API Key，否则 Agent 会报错"
 info "文档: docs/getting-started.md"

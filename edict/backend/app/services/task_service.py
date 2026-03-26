@@ -41,12 +41,14 @@ class TaskService:
         assignee_org: str | None = None,
         creator: str = "emperor",
         tags: list[str] | None = None,
-        initial_state: TaskState = TaskState.TAIZI,
+        initial_state: TaskState = TaskState.Taizi,
         meta: dict | None = None,
     ) -> Task:
         """创建任务并发布 task.created 事件。"""
         now = datetime.now(timezone.utc)
         trace_id = str(uuid.uuid4())
+        target_org = Task.org_for_state(initial_state, assignee_org)
+        task_meta = meta or {}
 
         task = Task(
             trace_id=trace_id,
@@ -57,6 +59,10 @@ class TaskService:
             assignee_org=assignee_org,
             creator=creator,
             tags=tags or [],
+            org=target_org,
+            official=creator,
+            now=description or "任务创建",
+            target_dept=assignee_org or "",
             flow_log=[
                 {
                     "from": None,
@@ -68,8 +74,8 @@ class TaskService:
             ],
             progress_log=[],
             todos=[],
-            scheduler=None,
-            meta=meta or {},
+            scheduler={},
+            meta=task_meta,
         )
         self.db.add(task)
         await self.db.flush()
@@ -115,6 +121,9 @@ class TaskService:
             )
 
         task.state = new_state
+        task.org = Task.org_for_state(new_state, task.assignee_org)
+        if reason:
+            task.now = reason
         task.updated_at = datetime.now(timezone.utc)
 
         # 记入 flow_log
@@ -141,6 +150,7 @@ class TaskService:
                 "from": old_state.value,
                 "to": new_state.value,
                 "reason": reason,
+                "assignee_org": task.assignee_org,
             },
         )
 

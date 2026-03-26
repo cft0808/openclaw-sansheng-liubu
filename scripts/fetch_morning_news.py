@@ -48,13 +48,10 @@ CATEGORY_KEYWORDS = {
 def curl_rss(url, timeout=10):
     """用 curl 抓取 RSS"""
     try:
-        r = subprocess.run(
-            ['curl', '-s', '--max-time', str(timeout), '-L',
-             '-A', 'Mozilla/5.0 (compatible; MorningBrief/1.0)',
-             url],
-            capture_output=True, timeout=timeout+2
-        )
-        return r.stdout.decode('utf-8', errors='ignore')
+        from urllib.request import Request, urlopen
+        req = Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; MorningBrief/1.0)'})
+        response = urlopen(req, timeout=timeout)
+        return response.read().decode('utf-8', errors='ignore')
     except Exception:
         return ''
 

@@ -55,9 +55,9 @@ def main():
                     pass
             if age_sec is None:
                 t['heartbeat'] = {'status': 'unknown', 'label': '⚪ 未知', 'ageSec': None}
-            elif age_sec < 180:
+            elif age_sec < 300:
                 t['heartbeat'] = {'status': 'active', 'label': f'🟢 活跃 {int(age_sec//60)}分钟前', 'ageSec': int(age_sec)}
-            elif age_sec < 600:
+            elif age_sec < 900:
                 t['heartbeat'] = {'status': 'warn', 'label': f'🟡 可能停滞 {int(age_sec//60)}分钟前', 'ageSec': int(age_sec)}
             else:
                 t['heartbeat'] = {'status': 'stalled', 'label': f'🔴 已停滞 {int(age_sec//60)}分钟', 'ageSec': int(age_sec)}

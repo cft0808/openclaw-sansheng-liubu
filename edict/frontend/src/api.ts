@@ -49,6 +49,8 @@ export const api = {
   // 操作类
   setModel: (agentId: string, model: string) =>
     postJ<ActionResult>(`${API_BASE}/api/set-model`, { agentId, model }),
+  setDispatchChannel: (channel: string) =>
+    postJ<ActionResult>(`${API_BASE}/api/set-dispatch-channel`, { channel }),
   agentWake: (agentId: string) =>
     postJ<ActionResult>(`${API_BASE}/api/agent-wake`, { agentId }),
   taskAction: (taskId: string, action: string, reason: string) =>
@@ -93,6 +95,18 @@ export const api = {
 
   createTask: (data: CreateTaskPayload) =>
     postJ<ActionResult & { taskId?: string }>(`${API_BASE}/api/create-task`, data),
+
+  // ── 朝堂议政 ──
+  courtDiscussStart: (topic: string, officials: string[], taskId?: string) =>
+    postJ<CourtDiscussResult>(`${API_BASE}/api/court-discuss/start`, { topic, officials, taskId }),
+  courtDiscussAdvance: (sessionId: string, userMessage?: string, decree?: string) =>
+    postJ<CourtDiscussResult>(`${API_BASE}/api/court-discuss/advance`, { sessionId, userMessage, decree }),
+  courtDiscussConclude: (sessionId: string) =>
+    postJ<ActionResult & { summary?: string }>(`${API_BASE}/api/court-discuss/conclude`, { sessionId }),
+  courtDiscussDestroy: (sessionId: string) =>
+    postJ<ActionResult>(`${API_BASE}/api/court-discuss/destroy`, { sessionId }),
+  courtDiscussFate: () =>
+    fetchJ<{ ok: boolean; event: string }>(`${API_BASE}/api/court-discuss/fate`),
 };
 
 // ── Types ──
@@ -178,6 +192,7 @@ export interface KnownModel {
 export interface AgentConfig {
   agents: AgentInfo[];
   knownModels?: KnownModel[];
+  dispatchChannel?: string;
 }
 
 export interface ChangeLogEntry {
@@ -394,5 +409,24 @@ export interface RemoteSkillsListResult {
   remoteSkills?: RemoteSkillItem[];
   count?: number;
   listedAt?: string;
+  error?: string;
+}
+
+// ── 朝堂议政 ──
+
+export interface CourtDiscussResult {
+  ok: boolean;
+  session_id?: string;
+  topic?: string;
+  round?: number;
+  new_messages?: Array<{
+    official_id: string;
+    name: string;
+    content: string;
+    emotion?: string;
+    action?: string;
+  }>;
+  scene_note?: string;
+  total_messages?: number;
   error?: string;
 }

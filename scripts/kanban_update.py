@@ -2,6 +2,13 @@
 """
 看板任务更新工具 - 供各省部 Agent 调用
 
+本工具操作 data/tasks_source.json（JSON 看板模式）。
+如果您已部署 edict/backend（Postgres + Redis 事件总线模式），
+请使用 edict/backend API 端点代替本脚本，或运行迁移脚本：
+  python3 edict/migration/migrate_json_to_pg.py
+
+两种模式互相独立，数据不会自动同步。
+
 用法:
   # 新建任务（收旨时）
   python3 kanban_update.py create JJC-20260223-012 "任务标题" Zhongshu 中书省 中书令
@@ -22,9 +29,10 @@
   # 🔥 实时进展汇报（Agent 主动调用，频率不限）
   python3 kanban_update.py progress JJC-20260223-012 "正在分析需求，拟定3个子方案" "1.调研技术选型|2.撰写设计文档|3.实现原型"
 """
-import json, pathlib, datetime, sys, subprocess, logging, os, re
+import datetime
+import json, pathlib, sys, subprocess, logging, os, re
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
+_BASE = pathlib.Path(os.environ['EDICT_HOME']) if 'EDICT_HOME' in os.environ else pathlib.Path(__file__).resolve().parent.parent
 TASKS_FILE = _BASE / 'data' / 'tasks_source.json'
 REFRESH_SCRIPT = _BASE / 'scripts' / 'refresh_live_data.py'
 
@@ -32,15 +40,17 @@ log = logging.getLogger('kanban')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
 
 # 文件锁 —— 防止多 Agent 同时读写 tasks_source.json
-from file_lock import atomic_json_read, atomic_json_update, atomic_json_write  # noqa: E402
+from file_lock import atomic_json_read, atomic_json_update  # noqa: E402
+from utils import now_iso  # noqa: E402
 
 STATE_ORG_MAP = {
-    'Taizi': '太子', 'Zhongshu': '中书省', 'Menxia': '门下省', 'Assigned': '尚书省',
+    'Taizi': '太子', 'Zhongshu': '中书省', 'Menxia': '门下省',
+    'Assigned': '尚书省', 'Next': '尚书省',
     'Doing': '执行中', 'Review': '尚书省', 'Done': '完成', 'Blocked': '阻塞',
 }
 
 _STATE_AGENT_MAP = {
-    'Taizi': 'main',
+    'Taizi': 'taizi',
     'Zhongshu': 'zhongshu',
     'Menxia': 'menxia',
     'Assigned': 'shangshu',
@@ -66,17 +76,13 @@ MAX_PROGRESS_LOG = 100  # 单任务最大进展日志条数
 def load():
     return atomic_json_read(TASKS_FILE, [])
 
-def save(tasks):
-    atomic_json_write(TASKS_FILE, tasks)
-    # 异步触发刷新，不阻塞调用方
+def _trigger_refresh():
+    """异步触发 live_status 刷新，不阻塞调用方。"""
     try:
         subprocess.Popen(['python3', str(REFRESH_SCRIPT)],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
-
-def now_iso():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 def find_task(tasks, task_id):
     return next((t for t in tasks if t.get('id') == task_id), None)
@@ -201,19 +207,44 @@ def cmd_create(task_id, title, state, org, official, remark=None):
         })
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     log.info(f'✅ 创建 {task_id} | {title[:30]} | state={state}')
 
 
+# ── 状态流转合法性校验 ──
+# 只允许文档定义的状态路径:
+# Pending→Taizi→Zhongshu→Menxia→Assigned→Doing→Review→Done
+# 额外: Blocked 可双向切换, Cancelled 从任意非终态可达, Next→Doing
+_VALID_TRANSITIONS = {
+    'Pending':   {'Taizi', 'Cancelled'},
+    'Taizi':     {'Zhongshu', 'Cancelled'},
+    'Zhongshu':  {'Menxia', 'Cancelled'},
+    'Menxia':    {'Assigned', 'Zhongshu', 'Cancelled'},   # 封驳可回中书
+    'Assigned':  {'Doing', 'Next', 'Blocked', 'Cancelled'},
+    'Next':      {'Doing', 'Blocked', 'Cancelled'},
+    'Doing':     {'Review', 'Blocked', 'Cancelled'},
+    'Review':    {'Done', 'Menxia', 'Doing', 'Cancelled'},  # 可打回重审/重做
+    'Blocked':   {'Doing', 'Next', 'Assigned', 'Review', 'Cancelled'},  # 解除后回原位
+    'Done':      set(),       # 终态
+    'Cancelled': set(),       # 终态
+}
+
+
 def cmd_state(task_id, new_state, now_text=None):
-    """更新任务状态（原子操作）"""
+    """更新任务状态（原子操作，含流转合法性校验）"""
     old_state = [None]
+    rejected = [False]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
             log.error(f'任务 {task_id} 不存在')
             return tasks
         old_state[0] = t['state']
+        allowed = _VALID_TRANSITIONS.get(old_state[0])
+        if allowed is not None and new_state not in allowed:
+            log.warning(f'⚠️ 非法状态转换 {task_id}: {old_state[0]} → {new_state}（允许: {allowed}）')
+            rejected[0] = True
+            return tasks
         t['state'] = new_state
         if new_state in STATE_ORG_MAP:
             t['org'] = STATE_ORG_MAP[new_state]
@@ -222,25 +253,33 @@ def cmd_state(task_id, new_state, now_text=None):
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
-    log.info(f'✅ {task_id} 状态更新: {old_state[0]} → {new_state}')
+    _trigger_refresh()
+    if rejected[0]:
+        log.info(f'❌ {task_id} 状态转换被拒: {old_state[0]} → {new_state}')
+    else:
+        log.info(f'✅ {task_id} 状态更新: {old_state[0]} → {new_state}')
 
 
 def cmd_flow(task_id, from_dept, to_dept, remark):
     """添加流转记录（原子操作）"""
     clean_remark = _sanitize_remark(remark)
+    agent_id = _infer_agent_id_from_runtime()
+    agent_label = _AGENT_LABELS.get(agent_id, agent_id)
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
             log.error(f'任务 {task_id} 不存在')
             return tasks
         t.setdefault('flow_log', []).append({
-            "at": now_iso(), "from": from_dept, "to": to_dept, "remark": clean_remark
+            "at": now_iso(), "from": from_dept, "to": to_dept, "remark": clean_remark,
+            "agent": agent_id, "agentLabel": agent_label,
         })
+        # 同步更新 org，使看板能正确显示当前所属部门
+        t['org'] = to_dept
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
 
 
@@ -258,10 +297,18 @@ def cmd_done(task_id, output_path='', summary=''):
             "at": now_iso(), "from": t.get('org', '执行部门'),
             "to": "皇上", "remark": f"✅ 完成：{summary or '任务已完成'}"
         })
+        # 同步设置 outputMeta，避免依赖 refresh_live_data.py 异步补充
+        if output_path:
+            p = pathlib.Path(output_path)
+            if p.exists():
+                ts = datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                t['outputMeta'] = {"exists": True, "lastModified": ts}
+            else:
+                t['outputMeta'] = {"exists": False, "lastModified": None}
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     log.info(f'✅ {task_id} 已完成')
 
 
@@ -277,7 +324,7 @@ def cmd_block(task_id, reason):
         t['updatedAt'] = now_iso()
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     log.warning(f'⚠️ {task_id} 已阻塞: {reason}')
 
 
@@ -366,7 +413,7 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
         total_cnt[0] = len(t.get('todos', []))
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     res_info = ''
     if tokens or cost or elapsed:
         res_info = f' [res: {tokens}tok/${cost:.4f}/{elapsed}s]'
@@ -406,7 +453,7 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
         result_info[1] = len(t['todos'])
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
-    save(load())  # trigger refresh
+    _trigger_refresh()
     log.info(f'✅ {task_id} todo [{result_info[0]}/{result_info[1]}]: {todo_id} → {status}')
 
 _CMD_MIN_ARGS = {

@@ -1,7 +1,10 @@
 """Edict 配置管理 — 从环境变量加载所有配置。"""
 
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings
+from sqlalchemy.engine.url import make_url
 
 
 class Settings(BaseSettings):
@@ -11,7 +14,7 @@ class Settings(BaseSettings):
     postgres_db: str = "edict"
     postgres_user: str = "edict"
     postgres_password: str = "edict_secret_change_me"
-    database_url_override: str | None = None  # 直接设置 DATABASE_URL 环境变量时用
+    database_url_override: str | None = Field(default=None, alias="DATABASE_URL")
 
     # ── Redis ──
     redis_url: str = "redis://localhost:6379/0"
@@ -39,9 +42,9 @@ class Settings(BaseSettings):
     heartbeat_interval_sec: int = 30
     scheduler_scan_interval_seconds: int = 60
 
-    # ── 飞书 ──
-    feishu_deliver: bool = True
-    feishu_channel: str = "feishu"
+    # ── 消息通知 ──
+    notification_enabled: bool = True
+    default_dispatch_channel: str = "feishu"
 
     @property
     def database_url(self) -> str:
@@ -55,6 +58,10 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         """同步 URL，供 Alembic 使用。"""
+        if self.database_url_override:
+            url = make_url(self.database_url_override)
+            drivername = url.drivername.split("+", 1)[0]
+            return str(url.set(drivername=drivername))
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"

@@ -35,27 +35,27 @@ log = logging.getLogger("migrate")
 
 # 旧版状态 → Edict TaskState
 STATE_MAP = {
-    "Taizi": TaskState.TAIZI,
-    "Zhongshu": TaskState.ZHONGSHU,
-    "Menxia": TaskState.MENXIA,
-    "Assigned": TaskState.ASSIGNED,
-    "Next": TaskState.NEXT,
-    "Doing": TaskState.DOING,
-    "Review": TaskState.REVIEW,
-    "Done": TaskState.DONE,
-    "Blocked": TaskState.BLOCKED,
-    "Cancelled": TaskState.CANCELLED,
-    "Pending": TaskState.PENDING,
+    "Taizi": TaskState.Taizi,
+    "Zhongshu": TaskState.Zhongshu,
+    "Menxia": TaskState.Menxia,
+    "Assigned": TaskState.Assigned,
+    "Next": TaskState.Next,
+    "Doing": TaskState.Doing,
+    "Review": TaskState.Review,
+    "Done": TaskState.Done,
+    "Blocked": TaskState.Blocked,
+    "Cancelled": TaskState.Cancelled,
+    "Pending": TaskState.Pending,
     # Fallbacks
-    "Inbox": TaskState.TAIZI,
-    "": TaskState.TAIZI,
+    "Inbox": TaskState.Taizi,
+    "": TaskState.Taizi,
 }
 
 
 def parse_old_task(old: dict) -> dict:
     """将旧版 task JSON 转换为 Edict Task 参数。"""
     state_str = old.get("state", "Taizi")
-    state = STATE_MAP.get(state_str, TaskState.TAIZI)
+    state = STATE_MAP.get(state_str, TaskState.Taizi)
 
     legacy_id = old.get("id", "")
     title = old.get("title", "未命名任务")
@@ -76,10 +76,21 @@ def parse_old_task(old: dict) -> dict:
         "assignee_org": old.get("org", None),
         "creator": old.get("official", "emperor"),
         "tags": [legacy_id] if legacy_id else [],
+        "org": old.get("org", Task.org_for_state(state)),
+        "official": old.get("official", ""),
+        "now": old.get("now", ""),
+        "eta": old.get("eta", "-"),
+        "block": old.get("block", "无"),
+        "output": old.get("output", ""),
+        "archived": bool(old.get("archived", False)),
         "flow_log": old.get("flow_log", []),
         "progress_log": old.get("progress_log", []),
         "todos": old.get("todos", []),
-        "scheduler": old.get("scheduler", None),
+        "scheduler": old.get("scheduler", {}),
+        "template_id": old.get("templateId", ""),
+        "template_params": old.get("templateParams", {}),
+        "ac": old.get("ac", ""),
+        "target_dept": old.get("targetDept", ""),
         "meta": {
             "legacy_id": legacy_id,
             "legacy_state": state_str,

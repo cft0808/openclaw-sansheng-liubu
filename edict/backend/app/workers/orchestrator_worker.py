@@ -156,7 +156,7 @@ class OrchestratorWorker:
         agent = STATE_AGENT_MAP.get(new_state)
 
         # 如果进入 assigned 状态，需要查找六部对应 agent
-        if new_state == TaskState.ASSIGNED:
+        if new_state == TaskState.Assigned:
             # 从 payload 获取 assignee_org
             org = payload.get("assignee_org", "")
             agent = ORG_AGENT_MAP.get(org, agent)
@@ -200,3 +200,7 @@ async def run_orchestrator():
         loop.add_signal_handler(sig, lambda: asyncio.create_task(worker.stop()))
 
     await worker.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_orchestrator())

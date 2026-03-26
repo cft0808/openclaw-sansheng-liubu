@@ -1,0 +1,17 @@
+{
+  "agents": {
+    "list": [
+      {"id": "taizi", "workspace": "/app/.openclaw/workspace-taizi", "subagents": {"allowAgents": ["zhongshu"]}},
+      {"id": "zhongshu", "workspace": "/app/.openclaw/workspace-zhongshu", "subagents": {"allowAgents": ["menxia", "shangshu"]}},
+      {"id": "menxia", "workspace": "/app/.openclaw/workspace-menxia", "subagents": {"allowAgents": ["shangshu", "zhongshu"]}},
+      {"id": "shangshu", "workspace": "/app/.openclaw/workspace-shangshu", "subagents": {"allowAgents": ["zhongshu", "menxia", "hubu", "libu", "bingbu", "xingbu", "gongbu", "libu_hr"]}},
+      {"id": "hubu", "workspace": "/app/.openclaw/workspace-hubu", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "libu", "workspace": "/app/.openclaw/workspace-libu", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "bingbu", "workspace": "/app/.openclaw/workspace-bingbu", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "xingbu", "workspace": "/app/.openclaw/workspace-xingbu", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "gongbu", "workspace": "/app/.openclaw/workspace-gongbu", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "libu_hr", "workspace": "/app/.openclaw/workspace-libu_hr", "subagents": {"allowAgents": ["shangshu"]}},
+      {"id": "zaochao", "workspace": "/app/.openclaw/workspace-zaochao", "subagents": {"allowAgents": []}}
+    ]
+  }
+}

@@ -25,14 +25,25 @@ def upgrade() -> None:
         sa.Column("title", sa.String(200), nullable=False),
         sa.Column("description", sa.Text(), server_default=""),
         sa.Column("priority", sa.String(10), server_default="中"),
-        sa.Column("state", sa.String(20), nullable=False, server_default="taizi"),
+        sa.Column("state", sa.String(20), nullable=False, server_default="Taizi"),
         sa.Column("assignee_org", sa.String(50), nullable=True),
         sa.Column("creator", sa.String(50), server_default="emperor"),
         sa.Column("tags", postgresql.JSONB(), server_default="[]"),
+        sa.Column("org", sa.String(32), nullable=False, server_default="太子"),
+        sa.Column("official", sa.String(32), server_default=""),
+        sa.Column("now", sa.Text(), server_default=""),
+        sa.Column("eta", sa.String(64), server_default="-"),
+        sa.Column("block", sa.Text(), server_default="无"),
+        sa.Column("output", sa.Text(), server_default=""),
+        sa.Column("archived", sa.Boolean(), server_default=sa.text("false")),
         sa.Column("flow_log", postgresql.JSONB(), server_default="[]"),
         sa.Column("progress_log", postgresql.JSONB(), server_default="[]"),
         sa.Column("todos", postgresql.JSONB(), server_default="[]"),
-        sa.Column("scheduler", postgresql.JSONB(), nullable=True),
+        sa.Column("scheduler", postgresql.JSONB(), server_default="{}"),
+        sa.Column("template_id", sa.String(64), server_default=""),
+        sa.Column("template_params", postgresql.JSONB(), server_default="{}"),
+        sa.Column("ac", sa.Text(), server_default=""),
+        sa.Column("target_dept", sa.String(64), server_default=""),
         sa.Column("meta", postgresql.JSONB(), server_default="{}"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
@@ -42,6 +53,8 @@ def upgrade() -> None:
     op.create_index("ix_tasks_trace_id", "tasks", ["trace_id"])
     op.create_index("ix_tasks_assignee_org", "tasks", ["assignee_org"])
     op.create_index("ix_tasks_created_at", "tasks", ["created_at"])
+    op.create_index("ix_tasks_updated_at", "tasks", ["updated_at"])
+    op.create_index("ix_tasks_state_archived", "tasks", ["state", "archived"])
     op.create_index("ix_tasks_tags", "tasks", ["tags"], postgresql_using="gin")
 
     # ── events 表 ──

@@ -151,7 +151,8 @@ class DispatchWorker:
         """异步调用 OpenClaw CLI — 在线程池中执行。"""
         settings = get_settings()
         cmd = [
-            "openclaw", "agent",
+            settings.openclaw_bin,
+            "agent",
             "--agent", agent,
             "-m", message,
         ]
@@ -200,3 +201,7 @@ async def run_dispatcher():
         loop.add_signal_handler(sig, lambda: asyncio.create_task(worker.stop()))
 
     await worker.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_dispatcher())

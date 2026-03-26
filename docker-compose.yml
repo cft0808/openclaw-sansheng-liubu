@@ -3,6 +3,7 @@ version: '3.8'
 services:
   sansheng-demo:
     image: cft0808/sansheng-demo:latest
+    platform: linux/amd64
     ports:
       - "7891:7891"
     environment:
@@ -10,4 +11,5 @@ services:
     restart: unless-stopped
 
 # 启动: docker compose up
+# 如果在 ARM Mac (M1/M2/M3) 上运行，删除 platform 行即可
 # 访问: http://localhost:7891

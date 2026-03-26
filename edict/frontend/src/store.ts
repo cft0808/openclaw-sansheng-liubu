@@ -66,7 +66,7 @@ export function isSession(t: Task): boolean {
 }
 
 export function isArchived(t: Task): boolean {
-  return t.archived || ['Done', 'Cancelled'].includes(t.state);
+  return !!t.archived;
 }
 
 export type PipeStatus = { key: string; dept: string; icon: string; action: string; status: 'done' | 'active' | 'pending' };
@@ -83,11 +83,12 @@ export function getPipeStatus(t: Task): PipeStatus[] {
 
 export type TabKey =
   | 'edicts' | 'monitor' | 'officials' | 'models'
-  | 'skills' | 'sessions' | 'memorials' | 'templates' | 'morning';
+  | 'skills' | 'sessions' | 'memorials' | 'templates' | 'morning' | 'court';
 
 export const TAB_DEFS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'edicts',    label: '旨意看板', icon: '📜' },
-  { key: 'monitor',   label: '省部调度', icon: '🏛️' },
+  { key: 'court',     label: '朝堂议政', icon: '🏛️' },
+  { key: 'monitor',   label: '省部调度', icon: '🔌' },
   { key: 'officials', label: '官员总览', icon: '👔' },
   { key: 'models',    label: '模型配置', icon: '🤖' },
   { key: 'skills',    label: '技能配置', icon: '🎯' },
@@ -110,7 +111,7 @@ export const DEPTS = [
   { id: 'xingbu',   label: '刑部',   emoji: '⚖️', role: '刑部尚书', rank: '正二品' },
   { id: 'gongbu',   label: '工部',   emoji: '🔧', role: '工部尚书', rank: '正二品' },
   { id: 'libu_hr',  label: '吏部',   emoji: '👔', role: '吏部尚书', rank: '正二品' },
-  { id: 'zaochao',  label: '钦天监', emoji: '🌟', role: '朝报官',   rank: '正三品' },
+  { id: 'zaochao',  label: '钦天监', emoji: '📰', role: '朝报官',   rank: '正三品' },
 ];
 
 // ── Templates ──

@@ -3,7 +3,7 @@
 同步 openclaw.json 中的 agent 配置 → data/agent_config.json
 支持自动发现 agent workspace 下的 Skills 目录
 """
-import json, pathlib, datetime, logging
+import json, os, pathlib, datetime, logging
 from file_lock import atomic_json_write
 
 log = logging.getLogger('sync_agent_config')
@@ -22,9 +22,9 @@ ID_LABEL = {
     'shangshu': {'label': '尚书省', 'role': '尚书令',   'duty': '派单与升级裁决',      'emoji': '📮'},
     'libu':     {'label': '礼部',   'role': '礼部尚书', 'duty': '文档/汇报/规范',      'emoji': '📝'},
     'hubu':     {'label': '户部',   'role': '户部尚书', 'duty': '资源/预算/成本',      'emoji': '💰'},
-    'bingbu':   {'label': '兵部',   'role': '兵部尚书', 'duty': '应急与巡检',          'emoji': '⚔️'},
+    'bingbu':   {'label': '兵部',   'role': '兵部尚书', 'duty': '工程实现与架构设计',  'emoji': '⚔️'},
     'xingbu':   {'label': '刑部',   'role': '刑部尚书', 'duty': '合规/审计/红线',      'emoji': '⚖️'},
-    'gongbu':   {'label': '工部',   'role': '工部尚书', 'duty': '工程交付与自动化',    'emoji': '🔧'},
+    'gongbu':   {'label': '工部',   'role': '工部尚书', 'duty': '基础设施与部署运维',  'emoji': '🔧'},
     'libu_hr':  {'label': '吏部',   'role': '吏部尚书', 'duty': '人事/培训/Agent管理',  'emoji': '👔'},
     'zaochao':  {'label': '钦天监', 'role': '朝报官',   'duty': '每日新闻采集与简报',  'emoji': '📰'},
 }
@@ -79,10 +79,38 @@ def get_skills(workspace: str):
     return skills
 
 
+def _collect_openclaw_models(cfg):
+    """从 openclaw.json 中收集所有已配置的 model id，与 KNOWN_MODELS 合并去重。
+    解决 #127: 自定义 provider 的 model 不在下拉列表中。
+    """
+    known_ids = {m['id'] for m in KNOWN_MODELS}
+    extra = []
+    agents_cfg = cfg.get('agents', {})
+    # 收集 defaults.model
+    dm = normalize_model(agents_cfg.get('defaults', {}).get('model', {}), '')
+    if dm and dm not in known_ids:
+        extra.append({'id': dm, 'label': dm, 'provider': 'OpenClaw'})
+        known_ids.add(dm)
+    # 收集每个 agent 的 model
+    for ag in agents_cfg.get('list', []):
+        m = normalize_model(ag.get('model', ''), '')
+        if m and m not in known_ids:
+            extra.append({'id': m, 'label': m, 'provider': 'OpenClaw'})
+            known_ids.add(m)
+    # 收集 providers 中的 model id（如 copilot-proxy、anthropic 等）
+    for pname, pcfg in cfg.get('providers', {}).items():
+        for mid in (pcfg.get('models') or []):
+            mid_str = mid if isinstance(mid, str) else (mid.get('id') or mid.get('name') or '')
+            if mid_str and mid_str not in known_ids:
+                extra.append({'id': mid_str, 'label': mid_str, 'provider': pname})
+                known_ids.add(mid_str)
+    return KNOWN_MODELS + extra
+
+
 def main():
     cfg = {}
     try:
-        cfg = json.loads(OPENCLAW_CFG.read_text())
+        cfg = json.loads(OPENCLAW_CFG.read_text(encoding='utf-8'))
     except Exception as e:
         log.warning(f'cannot read openclaw.json: {e}')
         return
@@ -90,6 +118,7 @@ def main():
     agents_cfg = cfg.get('agents', {})
     default_model = normalize_model(agents_cfg.get('defaults', {}).get('model', {}), 'unknown')
     agents_list = agents_cfg.get('list', [])
+    merged_models = _collect_openclaw_models(cfg)
 
     result = []
     seen_ids = set()
@@ -99,6 +128,10 @@ def main():
             continue
         meta = ID_LABEL[ag_id]
         workspace = ag.get('workspace', str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}'))
+        if 'allowAgents' in ag:
+            allow_agents = ag.get('allowAgents', []) or []
+        else:
+            allow_agents = ag.get('subagents', {}).get('allowAgents', [])
         result.append({
             'id': ag_id,
             'label': meta['label'], 'role': meta['role'], 'duty': meta['duty'], 'emoji': meta['emoji'],
@@ -106,7 +139,7 @@ def main():
             'defaultModel': default_model,
             'workspace': workspace,
             'skills': get_skills(workspace),
-            'allowAgents': ag.get('subagents', {}).get('allowAgents', []),
+            'allowAgents': allow_agents,
         })
         seen_ids.add(ag_id)
 
@@ -136,10 +169,20 @@ def main():
             'isDefaultModel': True,
         })
 
+    # 保留已有的 dispatchChannel 配置 (Fix #139)
+    existing_cfg = {}
+    cfg_path = DATA / 'agent_config.json'
+    if cfg_path.exists():
+        try:
+            existing_cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+
     payload = {
         'generatedAt': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'defaultModel': default_model,
-        'knownModels': KNOWN_MODELS,
+        'knownModels': merged_models,
+        'dispatchChannel': existing_cfg.get('dispatchChannel', 'feishu'),
         'agents': result,
     }
     DATA.mkdir(exist_ok=True)
@@ -167,8 +210,35 @@ _SOUL_DEPLOY_MAP = {
     'zaochao': 'zaochao',
 }
 
+def _sync_script_symlink(src_file: pathlib.Path, dst_file: pathlib.Path) -> bool:
+    """Create a symlink dst_file → src_file (resolved).
+
+    Using symlinks instead of physical copies ensures that ``__file__`` in
+    each script always resolves back to the project ``scripts/`` directory,
+    so relative-path computations like ``Path(__file__).resolve().parent.parent``
+    point to the correct project root regardless of which workspace runs the
+    script.  (Fixes #56 — kanban data-path split)
+
+    Returns True if the link was (re-)created, False if already up-to-date.
+    """
+    src_resolved = src_file.resolve()
+    # Already a correct symlink?
+    if dst_file.is_symlink() and dst_file.resolve() == src_resolved:
+        return False
+    # Remove stale file / old physical copy / broken symlink
+    if dst_file.exists() or dst_file.is_symlink():
+        dst_file.unlink()
+    os.symlink(src_resolved, dst_file)
+    return True
+
+
 def sync_scripts_to_workspaces():
-    """将项目 scripts/ 目录同步到各 agent workspace（保持 kanban_update.py 等最新）"""
+    """将项目 scripts/ 目录同步到各 agent workspace（保持 kanban_update.py 等最新）
+
+    Uses symlinks so that ``__file__`` in workspace copies resolves to the
+    project ``scripts/`` directory, keeping path-derived constants like
+    ``TASKS_FILE`` pointing to the canonical ``data/`` folder.
+    """
     scripts_src = BASE / 'scripts'
     if not scripts_src.is_dir():
         return
@@ -181,16 +251,10 @@ def sync_scripts_to_workspaces():
                 continue
             dst_file = ws_scripts / src_file.name
             try:
-                src_text = src_file.read_bytes()
+                if _sync_script_symlink(src_file, dst_file):
+                    synced += 1
             except Exception:
                 continue
-            try:
-                dst_text = dst_file.read_bytes() if dst_file.exists() else b''
-            except Exception:
-                dst_text = b''
-            if src_text != dst_text:
-                dst_file.write_bytes(src_text)
-                synced += 1
     # also sync to workspace-main for legacy compatibility
     ws_main_scripts = pathlib.Path.home() / '.openclaw/workspace-main/scripts'
     ws_main_scripts.mkdir(parents=True, exist_ok=True)
@@ -199,15 +263,12 @@ def sync_scripts_to_workspaces():
             continue
         dst_file = ws_main_scripts / src_file.name
         try:
-            src_text = src_file.read_bytes()
-            dst_text = dst_file.read_bytes() if dst_file.exists() else b''
-            if src_text != dst_text:
-                dst_file.write_bytes(src_text)
+            if _sync_script_symlink(src_file, dst_file):
                 synced += 1
         except Exception:
             pass
     if synced:
-        log.info(f'{synced} script files synced to workspaces')
+        log.info(f'{synced} script symlinks synced to workspaces')
 
 
 def deploy_soul_files():

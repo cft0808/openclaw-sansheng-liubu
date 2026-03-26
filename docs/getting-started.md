@@ -69,11 +69,7 @@ open http://127.0.0.1:7891
 
 > 💡 **提示**：`run_loop.sh` 每 15 秒自动同步数据。可用 `&` 后台运行。
 
-> 💡 **前端开发模式**：如果你要修改前端代码，使用 Vite 开发服务器：
-> ```bash
-> cd edict/frontend && npm install && npm run dev
-> ```
-> 访问 http://localhost:5173，Hot Module Replacement 自动刷新。修改完成后运行 `npm run build` 构建生产版本。
+> 💡 **看板即开即用**：`server.py` 内嵌 `dashboard/dashboard.html`，无需额外构建。Docker 镜像包含预构建的 React 前端。
 
 ## 第五步：发送第一道旨意
 
@@ -138,6 +134,28 @@ open http://127.0.0.1:7891
 python3 dashboard/server.py
 ```
 
+### Agent 报错 "No API key found for provider"
+
+这是最常见的问题。三省六部有 11 个 Agent，每个都需要 API Key。
+
+```bash
+# 方法一：为任意 Agent 配置后重新运行 install.sh（推荐）
+openclaw agents add taizi          # 按提示输入 Anthropic API Key
+cd edict && ./install.sh            # 自动同步到所有 Agent
+
+# 方法二：手动复制 auth 文件
+MAIN_AUTH=$(find ~/.openclaw/agents -name auth-profiles.json | head -1)
+for agent in taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu; do
+  mkdir -p ~/.openclaw/agents/$agent/agent
+  cp "$MAIN_AUTH" ~/.openclaw/agents/$agent/agent/auth-profiles.json
+done
+
+# 方法三：逐个配置
+openclaw agents add taizi
+openclaw agents add zhongshu
+# ... 其他 Agent
+```
+
 ### Agent 不响应
 ```bash
 # 检查 Gateway 状态
@@ -180,3 +198,4 @@ openclaw gateway restart
 - [📖 README](../README.md)
 - [🤝 贡献指南](../CONTRIBUTING.md)
 - [💬 OpenClaw 文档](https://docs.openclaw.ai)
+- [📮 公众号 · cft0808](wechat.md) — 架构拆解 / 踩坑复盘 / Token 省钱术
