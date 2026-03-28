@@ -1,4 +1,4 @@
-from typing import Protocol, ClassVar
+from typing import Protocol, ClassVar, Optional, Tuple
 from abc import abstractmethod
 
 
@@ -7,7 +7,7 @@ class NotificationChannel(Protocol):
     label: ClassVar[str]
     icon: ClassVar[str]
     placeholder: ClassVar[str]
-    allowed_domains: ClassVar[tuple[str, ...]]
+    allowed_domains: ClassVar[Tuple[str, ...]]
 
     @classmethod
     @abstractmethod
@@ -16,7 +16,7 @@ class NotificationChannel(Protocol):
 
     @classmethod
     @abstractmethod
-    def send(cls, webhook: str, title: str, content: str, url: str | None = None) -> bool:
+    def send(cls, webhook: str, title: str, content: str, url: Optional[str] = None) -> bool:
         ...
 
     @classmethod

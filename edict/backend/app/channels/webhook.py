@@ -1,7 +1,7 @@
 import json
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from .base import NotificationChannel
 
@@ -18,7 +18,7 @@ class WebhookChannel(NotificationChannel):
         return cls._validate_url_scheme(webhook)
 
     @classmethod
-    def send(cls, webhook: str, title: str, content: str, url: str | None = None) -> bool:
+    def send(cls, webhook: str, title: str, content: str, url: Optional[str] = None) -> bool:
         payload = json.dumps({
             'title': title,
             'content': content,

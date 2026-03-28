@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-同步 openclaw.json 中的 agent 配置 → data/agent_config.json
-支持自动发现 agent workspace 下的 Skills 目录
-"""
 import json, os, pathlib, datetime, logging
 from file_lock import atomic_json_write
 
@@ -10,9 +5,9 @@ log = logging.getLogger('sync_agent_config')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
 
 # Auto-detect project root (parent of scripts/)
-BASE = pathlib.Path(__file__).parent.parent
-DATA = BASE / 'data'
-OPENCLAW_CFG = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
+BASE = '/Users/jk/edict'
+DATA = BASE +'/data'
+OPENCLAW_CFG = '/Users/jk/.openclaw/openclaw.json'
 
 ID_LABEL = {
     'taizi':    {'label': '太子',   'role': '太子',     'duty': '飞书消息分拣与回奏',  'emoji': '🤴'},
@@ -80,9 +75,7 @@ def get_skills(workspace: str):
 
 
 def _collect_openclaw_models(cfg):
-    """从 openclaw.json 中收集所有已配置的 model id，与 KNOWN_MODELS 合并去重。
-    解决 #127: 自定义 provider 的 model 不在下拉列表中。
-    """
+  
     known_ids = {m['id'] for m in KNOWN_MODELS}
     extra = []
     agents_cfg = cfg.get('agents', {})
@@ -191,7 +184,6 @@ def main():
 
     # 自动部署 SOUL.md 到 workspace（如果项目里有更新）
     deploy_soul_files()
-    # 同步 scripts/ 到各 workspace（保持 kanban_update.py 等最新）
     sync_scripts_to_workspaces()
 
 
@@ -211,30 +203,10 @@ _SOUL_DEPLOY_MAP = {
 }
 
 def _sync_script_symlink(src_file: pathlib.Path, dst_file: pathlib.Path) -> bool:
-    """Create a symlink dst_file → src_file (resolved).
 
-    Using symlinks instead of physical copies ensures that ``__file__`` in
-    each script always resolves back to the project ``scripts/`` directory,
-    so relative-path computations like ``Path(__file__).resolve().parent.parent``
-    point to the correct project root regardless of which workspace runs the
-    script.  (Fixes #56 — kanban data-path split)
-
-    Returns True if the link was (re-)created, False if already up-to-date.
-    """
     src_resolved = src_file.resolve()
-    # Guard: skip if dst resolves to the same real path as src.
-    # This happens when ws_scripts is itself a directory-level symlink pointing
-    # to the project scripts/ dir (created by install.sh link_resources).
-    # Without this check the function would unlink the real source file and
-    # then create a self-referential symlink (foo.py -> foo.py).
-    try:
-        dst_resolved = dst_file.resolve()
-    except OSError:
-        dst_resolved = None
-    if dst_resolved == src_resolved:
-        return False
     # Already a correct symlink?
-    if dst_file.is_symlink() and dst_resolved == src_resolved:
+    if dst_file.is_symlink() and dst_file.resolve() == src_resolved:
         return False
     # Remove stale file / old physical copy / broken symlink
     if dst_file.exists() or dst_file.is_symlink():
@@ -244,12 +216,7 @@ def _sync_script_symlink(src_file: pathlib.Path, dst_file: pathlib.Path) -> bool
 
 
 def sync_scripts_to_workspaces():
-    """将项目 scripts/ 目录同步到各 agent workspace（保持 kanban_update.py 等最新）
-
-    Uses symlinks so that ``__file__`` in workspace copies resolves to the
-    project ``scripts/`` directory, keeping path-derived constants like
-    ``TASKS_FILE`` pointing to the canonical ``data/`` folder.
-    """
+   
     scripts_src = BASE / 'scripts'
     if not scripts_src.is_dir():
         return
@@ -283,7 +250,6 @@ def sync_scripts_to_workspaces():
 
 
 def deploy_soul_files():
-    """将项目 agents/xxx/SOUL.md 部署到 ~/.openclaw/workspace-xxx/soul.md"""
     agents_dir = BASE / 'agents'
     deployed = 0
     for proj_name, runtime_id in _SOUL_DEPLOY_MAP.items():

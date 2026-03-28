@@ -1,7 +1,7 @@
 import json
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from .base import NotificationChannel
 
@@ -21,7 +21,7 @@ class FeishuChannel(NotificationChannel):
         return any(domain.endswith(d) for d in cls.allowed_domains)
 
     @classmethod
-    def send(cls, webhook: str, title: str, content: str, url: str | None = None) -> bool:
+    def send(cls, webhook: str, title: str, content: str, url: Optional[str] = None) -> bool:
         elements = [
             {'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}
         ]

@@ -15,6 +15,7 @@
 import json
 import logging
 import os
+from typing import Optional
 import time
 import uuid
 
@@ -209,7 +210,7 @@ def advance_discussion(session_id: str, user_message: str = None,
     }
 
 
-def get_session(session_id: str) -> dict | None:
+def get_session(session_id: str) -> Optional[dict]:
     session = _sessions.get(session_id)
     if not session:
         return None
@@ -287,7 +288,7 @@ _COPILOT_MODELS = [
 _COPILOT_PREFERRED = ['gpt-4o-mini', 'claude-haiku', 'gemini-flash', 'gpt-4o']
 
 
-def _pick_chat_model(models: list[dict]) -> str | None:
+def _pick_chat_model(models: list[dict]) -> Optional[str]:
     """从 provider 的模型列表中选一个适合聊天的轻量模型。"""
     ids = [m['id'] for m in models if isinstance(m, dict) and 'id' in m]
     for pref in _PREFERRED_MODELS:
@@ -297,7 +298,7 @@ def _pick_chat_model(models: list[dict]) -> str | None:
     return ids[0] if ids else None
 
 
-def _read_copilot_token() -> str | None:
+def _read_copilot_token() -> Optional[str]:
     """读取 openclaw 管理的 GitHub Copilot token。"""
     token_path = os.path.expanduser('~/.openclaw/credentials/github-copilot.token.json')
     if not os.path.exists(token_path):
@@ -318,7 +319,7 @@ def _read_copilot_token() -> str | None:
         return None
 
 
-def _get_llm_config() -> dict | None:
+def _get_llm_config() -> Optional[dict]:
     """从 openclaw 配置读取 LLM 设置，支持环境变量覆盖。
 
     优先级: 环境变量 > github-copilot token > 本地 copilot-proxy > anthropic > 其他 provider
@@ -407,7 +408,7 @@ def _get_llm_config() -> dict | None:
     return None
 
 
-def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) -> str | None:
+def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) -> Optional[str]:
     """调用 LLM API（自动适配 GitHub Copilot / OpenAI / Anthropic 协议）。"""
     config = _get_llm_config()
     if not config:
@@ -475,7 +476,7 @@ def _llm_complete(system_prompt: str, user_prompt: str, max_tokens: int = 1024) 
             return None
 
 
-def _llm_discuss(session: dict, user_message: str = None, decree: str = None) -> dict | None:
+def _llm_discuss(session: dict, user_message: str = None, decree: str = None) -> Optional[dict]:
     """使用 LLM 生成多官员讨论。"""
     officials = session['officials']
     names = '、'.join(o['name'] for o in officials)
@@ -567,7 +568,7 @@ def _llm_discuss(session: dict, user_message: str = None, decree: str = None) ->
         return None
 
 
-def _llm_summarize(session: dict) -> str | None:
+def _llm_summarize(session: dict) -> Optional[str]:
     """用 LLM 总结讨论结果。"""
     official_msgs = [m for m in session['messages'] if m['type'] == 'official']
     topic = session['topic']

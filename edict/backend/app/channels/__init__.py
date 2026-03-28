@@ -1,4 +1,4 @@
-from typing import Type
+from typing import Type, Optional
 
 from .base import NotificationChannel
 from .feishu import FeishuChannel
@@ -19,7 +19,7 @@ CHANNELS: dict[str, Type[NotificationChannel]] = {
 }
 
 
-def get_channel(channel_type: str) -> Type[NotificationChannel] | None:
+def get_channel(channel_type: str) -> Optional[Type[NotificationChannel]]:
     return CHANNELS.get(channel_type)
 
 
