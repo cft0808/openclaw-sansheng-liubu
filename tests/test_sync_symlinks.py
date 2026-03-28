@@ -100,6 +100,36 @@ class TestSyncScriptSymlink:
         assert dst.is_symlink()
         assert dst.resolve() == src.resolve()
 
+    def test_skips_self_referential_via_directory_symlink(self, tmp_path):
+        """Regression test for the bug where install.sh creates
+        workspace/scripts -> project/scripts (directory-level symlink).
+
+        When dst_file is accessed through a directory symlink that points back
+        to the same directory as src_file, dst_file.resolve() == src_resolved.
+        The function must detect this and return False without touching the file.
+        """
+        # Simulate project/scripts/ with a real Python file
+        proj_scripts = tmp_path / 'project' / 'scripts'
+        proj_scripts.mkdir(parents=True)
+        real_file = proj_scripts / 'foo.py'
+        real_file.write_text('# real content\n')
+
+        # Simulate install.sh: workspace/scripts -> project/scripts
+        ws_scripts = tmp_path / 'workspace-main' / 'scripts'
+        ws_scripts.parent.mkdir(parents=True)
+        os.symlink(proj_scripts, ws_scripts)  # directory-level symlink
+
+        # dst_file goes through the directory symlink
+        dst_file = ws_scripts / 'foo.py'
+
+        created = sac._sync_script_symlink(real_file, dst_file)
+
+        assert created is False, 'should skip when dst resolves to same real path as src'
+        assert real_file.is_file() and not real_file.is_symlink(), (
+            'src file must not be deleted or converted to a self-referential symlink'
+        )
+        assert real_file.read_text() == '# real content\n', 'src file content must be unchanged'
+
 
 class TestSyncScriptsToWorkspaces:
     """Integration tests for the full ``sync_scripts_to_workspaces`` flow."""
@@ -169,3 +199,29 @@ class TestSyncScriptsToWorkspaces:
             f'Expected {project.root}, got {computed_base}; '
             'symlink should resolve __file__ back to project root'
         )
+
+    def test_no_self_referential_symlinks_when_workspace_scripts_is_dir_symlink(
+        self, project, monkeypatch
+    ):
+        """Regression test for GitHub issue #217.
+
+        install.sh creates workspace-main/scripts as a directory-level symlink
+        pointing to the project scripts/ dir.  sync_scripts_to_workspaces()
+        must not delete the real source files and create self-referential links.
+        """
+        # Make workspace-main/scripts a directory symlink back to project scripts/
+        ws_main = project.home / '.openclaw' / 'workspace-main'
+        ws_main.mkdir(parents=True, exist_ok=True)
+        ws_main_scripts = ws_main / 'scripts'
+        os.symlink(project.scripts, ws_main_scripts)  # directory-level symlink
+
+        sac.sync_scripts_to_workspaces()
+
+        # Source files must still be real files with their original content
+        for script in project.scripts.iterdir():
+            if script.suffix in ('.py', '.sh') and not script.stem.startswith('__'):
+                assert not script.is_symlink(), (
+                    f'{script.name} was converted to a symlink — '
+                    'self-referential symlink bug has regressed'
+                )
+                assert script.stat().st_size > 0, f'{script.name} content was lost'
