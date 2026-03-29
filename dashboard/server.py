@@ -638,16 +638,16 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
         nums = [int(tid.split('-')[-1]) for tid in today_ids if tid.split('-')[-1].isdigit()]
         seq = max(nums) + 1 if nums else 1
     task_id = f'JJC-{today}-{seq:03d}'
-    # 正确流程起点：皇上 -> 太子分拣
+    # Dashboard 内部系统链：已创建 JJC 任务视为已立案，默认跳过太子复判，直入中书省
     # target_dept 记录模板建议的最终执行部门（仅供尚书省派发参考）
-    initial_org = '太子'
+    initial_org = '中书省'
     new_task = {
         'id': task_id,
         'title': title,
         'official': official,
         'org': initial_org,
-        'state': 'Taizi',
-        'now': '等待太子接旨分拣',
+        'state': 'Zhongshu',
+        'now': '已立案，等待中书省起草',
         'eta': '-',
         'block': '无',
         'output': '',
@@ -659,7 +659,7 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
             'at': now_iso(),
             'from': '皇上',
             'to': initial_org,
-            'remark': f'下旨：{title}'
+            'remark': f'立案：{title}'
         }],
         'updatedAt': now_iso(),
     }
@@ -674,9 +674,9 @@ def handle_create_task(title, org='中书省', official='中书令', priority='n
     save_tasks(tasks)
     log.info(f'创建任务: {task_id} | {title[:40]}')
 
-    dispatch_for_state(task_id, new_task, 'Taizi', trigger='imperial-edict')
+    dispatch_for_state(task_id, new_task, 'Zhongshu', trigger='dashboard-direct-zhongshu')
 
-    return {'ok': True, 'taskId': task_id, 'message': f'旨意 {task_id} 已下达，正在派发给太子'}
+    return {'ok': True, 'taskId': task_id, 'message': f'旨意 {task_id} 已立案，正在直派中书省'}
 
 
 def handle_review_action(task_id, action, comment=''):
