@@ -1597,3 +1597,43 @@ curl http://127.0.0.1:7891/api/task-activity/JJC-20260302-001
 **核心价值**：用制度确保质量，用透明确保信心，用自动化确保效率。
 
 相比 CrewAI/AutoGen 的"自由+人工管理"，三省六部提供了一套**企业级的AI协作框架**。
+
+
+## Workflow state vs execution ownership
+
+In Edict workflows, **workflow state** and **execution ownership** are related but not always identical.
+
+### Workflow state
+Workflow state describes the current institutional stage of a task, for example:
+
+- `Taizi`
+- `Zhongshu`
+- `Menxia`
+- `Assigned`
+- `Doing`
+- `Review`
+- `Done`
+
+This is the stage shown in the board/UI and reflects where the task is in the intended process.
+
+### Execution ownership
+Execution ownership means which actual runtime agent/session currently owns the next action or is writing the next progress/log update.
+
+In simple flows, workflow state and execution ownership may appear to match.
+
+In more complex or multi-stage flows, they can temporarily diverge. For example:
+- the workflow state may already show `Assigned`
+- while the active runtime execution context is still tied to an earlier stage's dispatch chain
+
+### Why this distinction matters
+This distinction is useful when:
+- debugging handoff behavior
+- understanding why a later-stage label appears before a fully isolated execution handoff occurs
+- reasoning about future improvements such as stage-isolated orchestration
+
+In short:
+
+- **workflow state** = where the task is in the institutional process
+- **execution ownership** = which runtime path currently holds the next action
+
+> This documentation does not change runtime semantics. It only clarifies an important concept for advanced real-world usage.
