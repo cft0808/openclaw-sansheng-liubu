@@ -295,18 +295,41 @@ cd edict
 chmod +x install.sh && ./install.sh
 ```
 
+默认是 **全量安装模式**，会像以前一样把三省六部全部注册到全局 OpenClaw。
+
+如果你想使用 **沙箱安装模式**（推荐给已有 OpenClaw 主环境、只想让 `taizi` 对外可见的用户）：
+
+```bash
+chmod +x install.sh
+./install.sh --sandbox
+# 或：EDICT_INSTALL_MODE=sandbox ./install.sh
+```
+
+沙箱模式会：
+- 仅全局注册 `taizi`
+- 将其余省部放到 `~/.openclaw/workspaces/edict/agents/<agent>`
+- 将共享数据放到 `~/.openclaw/workspaces/edict/data`
+- 让看板优先读取沙箱 data/agents，而不是只依赖 `~/.openclaw/workspace-*`
+- 保持默认全量安装行为不变
+
+如需自定义沙箱根目录：
+
+```bash
+./install.sh --sandbox --sandbox-root ~/.openclaw/workspaces/my-edict
+```
+
 安装脚本自动完成：
-- ✅ 创建全量 Agent Workspace（含太子/吏部/早朝，兼容历史 main）
+- ✅ 创建 Agent Workspace（全量模式为全局 workspace；沙箱模式为 `taizi` 全局 + 其余省部沙箱化）
 - ✅ 写入各省部 SOUL.md（角色人格 + 工作流规则 + 数据清洗规范）
-- ✅ 注册 Agent 及权限矩阵到 `openclaw.json`
-- ✅ **符号链接统一数据**（各 Workspace 的 data/scripts → 项目目录，确保数据一致）
+- ✅ 注册 Agent 及权限矩阵到 `openclaw.json`（沙箱模式仅注册 `taizi`）
+- ✅ **符号链接统一数据**（全量模式链接到项目目录；沙箱模式链接到 `~/.openclaw/workspaces/edict/{data,scripts}`，确保数据一致）
 - ✅ **设置 Agent 间通信可见性**（`sessions.visibility all`，解决消息不可达问题）
 - ✅ **同步 API Key 到所有 Agent**（自动从已配置的 Agent 复制）
 - ✅ 构建 React 前端（需 Node.js 18+，如未安装则跳过）
 - ✅ 初始化数据目录 + 首次数据同步（含官员统计）
 - ✅ 重启 Gateway 使配置生效
 
-> ⚠️ **首次安装**：需先配置 API Key：`openclaw agents add taizi`，然后重新运行 `./install.sh` 同步到所有 Agent。
+> ⚠️ **首次安装**：需先配置 API Key：`openclaw agents add taizi`，然后重新运行 `./install.sh`。全量模式会同步到所有全局 Agent；沙箱模式只要求 `taizi` 全局可用。
 
 #### 启动
 

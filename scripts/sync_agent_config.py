@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 BASE = pathlib.Path(__file__).parent.parent
 DATA = BASE / 'data'
 OPENCLAW_CFG = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
+SANDBOX_ROOT = pathlib.Path.home() / '.openclaw' / 'workspaces' / 'edict'
 
 ID_LABEL = {
     'taizi':    {'label': '太子',   'role': '太子',     'duty': '飞书消息分拣与回奏',  'emoji': '🤴'},
@@ -117,6 +118,27 @@ def _collect_openclaw_models(cfg):
     return KNOWN_MODELS + extra
 
 
+def _default_workspace_for(agent_id: str) -> str:
+    sandbox_ws = SANDBOX_ROOT / 'agents' / agent_id
+    if sandbox_ws.exists():
+        return str(sandbox_ws)
+    return str(pathlib.Path.home() / f'.openclaw/workspace-{agent_id}')
+
+
+def _discover_sandbox_agents():
+    discovered = {}
+    agents_dir = SANDBOX_ROOT / 'agents'
+    if not agents_dir.is_dir():
+        return discovered
+    for agent_dir in sorted(agents_dir.iterdir()):
+        if not agent_dir.is_dir():
+            continue
+        ag_id = agent_dir.name
+        if ag_id in ID_LABEL:
+            discovered[ag_id] = str(agent_dir)
+    return discovered
+
+
 def main():
     cfg = {}
     try:
@@ -129,6 +151,7 @@ def main():
     default_model = normalize_model(agents_cfg.get('defaults', {}).get('model', {}), 'unknown')
     agents_list = agents_cfg.get('list', [])
     merged_models = _collect_openclaw_models(cfg)
+    sandbox_agents = _discover_sandbox_agents()
 
     result = []
     seen_ids = set()
@@ -137,7 +160,7 @@ def main():
         if ag_id not in ID_LABEL:
             continue
         meta = ID_LABEL[ag_id]
-        workspace = ag.get('workspace', str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}'))
+        workspace = ag.get('workspace', _default_workspace_for(ag_id))
         if 'allowAgents' in ag:
             allow_agents = ag.get('allowAgents', []) or []
         else:
@@ -155,13 +178,13 @@ def main():
 
     # 补充不在 openclaw.json agents list 中的 agent（兼容旧版 main）
     EXTRA_AGENTS = {
-        'taizi':   {'model': default_model, 'workspace': str(pathlib.Path.home() / '.openclaw/workspace-taizi'),
+        'taizi':   {'model': default_model, 'workspace': _default_workspace_for('taizi'),
                     'allowAgents': ['zhongshu']},
         'main':    {'model': default_model, 'workspace': str(pathlib.Path.home() / '.openclaw/workspace-main'),
                     'allowAgents': ['zhongshu','menxia','shangshu','hubu','libu','bingbu','xingbu','gongbu','libu_hr']},
-        'zaochao': {'model': default_model, 'workspace': str(pathlib.Path.home() / '.openclaw/workspace-zaochao'),
+        'zaochao': {'model': default_model, 'workspace': _default_workspace_for('zaochao'),
                     'allowAgents': []},
-        'libu_hr': {'model': default_model, 'workspace': str(pathlib.Path.home() / '.openclaw/workspace-libu_hr'),
+        'libu_hr': {'model': default_model, 'workspace': _default_workspace_for('libu_hr'),
                     'allowAgents': ['shangshu']},
     }
     for ag_id, extra in EXTRA_AGENTS.items():
@@ -177,6 +200,21 @@ def main():
             'skills': get_skills(extra['workspace']),
             'allowAgents': extra['allowAgents'],
             'isDefaultModel': True,
+        })
+
+    for ag_id, workspace in sandbox_agents.items():
+        if ag_id in seen_ids or ag_id not in ID_LABEL:
+            continue
+        meta = ID_LABEL[ag_id]
+        result.append({
+            'id': ag_id,
+            'label': meta['label'], 'role': meta['role'], 'duty': meta['duty'], 'emoji': meta['emoji'],
+            'model': default_model,
+            'defaultModel': default_model,
+            'workspace': workspace,
+            'skills': get_skills(workspace),
+            'allowAgents': [],
+            'isSandboxOnly': True,
         })
 
     # 保留已有的 dispatchChannel 配置 (Fix #139)

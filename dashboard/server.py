@@ -90,8 +90,11 @@ def cors_headers(h):
 
 
 def _iter_task_data_dirs():
-    """返回可用的任务数据目录候选（优先 workspace，其次本地 data）。"""
+    """返回可用的任务数据目录候选（优先 workspace/sandbox，其次本地 data）。"""
     dirs = [DATA]
+    sandbox_data = OCLAW_HOME / 'workspaces' / 'edict' / 'data'
+    if sandbox_data.is_dir():
+        dirs.append(sandbox_data)
     for p in sorted(OCLAW_HOME.glob('workspace-*/data')):
         if p.is_dir():
             dirs.append(p)

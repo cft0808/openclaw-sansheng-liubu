@@ -7,6 +7,31 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OC_HOME="$HOME/.openclaw"
 OC_CFG="$OC_HOME/openclaw.json"
+INSTALL_MODE="${EDICT_INSTALL_MODE:-full}"
+SANDBOX_NAME="${EDICT_SANDBOX_NAME:-edict}"
+SANDBOX_ROOT="$OC_HOME/workspaces/$SANDBOX_NAME"
+AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sandbox)
+      INSTALL_MODE="sandbox"
+      ;;
+    --full)
+      INSTALL_MODE="full"
+      ;;
+    --sandbox-root)
+      shift
+      SANDBOX_ROOT="$1"
+      ;;
+    --sync-auth)
+      SYNC_AUTH_ONLY=true
+      ;;
+    *)
+      ;;
+  esac
+  shift || true
+done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
@@ -23,6 +48,31 @@ log()   { echo -e "${GREEN}✅ $1${NC}"; }
 warn()  { echo -e "${YELLOW}⚠️  $1${NC}"; }
 error() { echo -e "${RED}❌ $1${NC}"; }
 info()  { echo -e "${BLUE}ℹ️  $1${NC}"; }
+
+agent_workspace() {
+  local agent="$1"
+  if [ "$INSTALL_MODE" = "sandbox" ] && [ "$agent" != "taizi" ]; then
+    echo "$SANDBOX_ROOT/agents/$agent"
+  else
+    echo "$OC_HOME/workspace-$agent"
+  fi
+}
+
+shared_data_dir() {
+  if [ "$INSTALL_MODE" = "sandbox" ]; then
+    echo "$SANDBOX_ROOT/data"
+  else
+    echo "$REPO_DIR/data"
+  fi
+}
+
+shared_scripts_dir() {
+  if [ "$INSTALL_MODE" = "sandbox" ]; then
+    echo "$SANDBOX_ROOT/scripts"
+  else
+    echo "$REPO_DIR/scripts"
+  fi
+}
 
 # ── Step 0: 依赖检查 ──────────────────────────────────────────
 check_deps() {
@@ -92,9 +142,9 @@ backup_existing() {
 create_workspaces() {
   info "创建 Agent Workspace..."
   
-  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+  [ "$INSTALL_MODE" = "sandbox" ] && mkdir -p "$SANDBOX_ROOT/agents"
   for agent in "${AGENTS[@]}"; do
-    ws="$OC_HOME/workspace-$agent"
+    ws="$(agent_workspace "$agent")"
     mkdir -p "$ws/skills"
     if [ -f "$REPO_DIR/agents/$agent/SOUL.md" ]; then
       if [ -f "$ws/SOUL.md" ]; then
@@ -109,7 +159,7 @@ create_workspaces() {
 
   # 通用 AGENTS.md（工作协议）
   for agent in "${AGENTS[@]}"; do
-    cat > "$OC_HOME/workspace-$agent/AGENTS.md" << 'AGENTS_EOF'
+    cat > "$(agent_workspace "$agent")/AGENTS.md" << 'AGENTS_EOF'
 # AGENTS.md · 工作协议
 
 1. 接到任务先回复"已接旨"。
@@ -128,34 +178,41 @@ register_agents() {
   cp "$OC_CFG" "$OC_CFG.bak.sansheng-$(date +%Y%m%d-%H%M%S)"
   log "已备份配置: $OC_CFG.bak.*"
 
-  python3 << 'PYEOF'
-import json, pathlib, sys
+  INSTALL_MODE="$INSTALL_MODE" SANDBOX_ROOT="$SANDBOX_ROOT" python3 << 'PYEOF'
+import json, os, pathlib
 
 cfg_path = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
 cfg = json.loads(cfg_path.read_text())
+install_mode = os.environ.get('INSTALL_MODE', 'full')
+sandbox_root = pathlib.Path(os.environ.get('SANDBOX_ROOT', str(pathlib.Path.home() / '.openclaw' / 'workspaces' / 'edict')))
 
-AGENTS = [
+all_agents = [
   {"id": "taizi",    "subagents": {"allowAgents": ["zhongshu"]}},
-    {"id": "zhongshu", "subagents": {"allowAgents": ["menxia", "shangshu"]}},
-    {"id": "menxia",   "subagents": {"allowAgents": ["shangshu", "zhongshu"]}},
+  {"id": "zhongshu", "subagents": {"allowAgents": ["menxia", "shangshu"]}},
+  {"id": "menxia",   "subagents": {"allowAgents": ["shangshu", "zhongshu"]}},
   {"id": "shangshu", "subagents": {"allowAgents": ["zhongshu", "menxia", "hubu", "libu", "bingbu", "xingbu", "gongbu", "libu_hr"]}},
-    {"id": "hubu",     "subagents": {"allowAgents": ["shangshu"]}},
-    {"id": "libu",     "subagents": {"allowAgents": ["shangshu"]}},
-    {"id": "bingbu",   "subagents": {"allowAgents": ["shangshu"]}},
-    {"id": "xingbu",   "subagents": {"allowAgents": ["shangshu"]}},
-    {"id": "gongbu",   "subagents": {"allowAgents": ["shangshu"]}},
+  {"id": "hubu",     "subagents": {"allowAgents": ["shangshu"]}},
+  {"id": "libu",     "subagents": {"allowAgents": ["shangshu"]}},
+  {"id": "bingbu",   "subagents": {"allowAgents": ["shangshu"]}},
+  {"id": "xingbu",   "subagents": {"allowAgents": ["shangshu"]}},
+  {"id": "gongbu",   "subagents": {"allowAgents": ["shangshu"]}},
   {"id": "libu_hr",  "subagents": {"allowAgents": ["shangshu"]}},
   {"id": "zaochao",  "subagents": {"allowAgents": []}},
 ]
+
+agents = [ag for ag in all_agents if install_mode != 'sandbox' or ag['id'] == 'taizi']
 
 agents_cfg = cfg.setdefault('agents', {})
 agents_list = agents_cfg.get('list', [])
 existing_ids = {a['id'] for a in agents_list}
 
 added = 0
-for ag in AGENTS:
+for ag in agents:
     ag_id = ag['id']
-    ws = str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}')
+    if install_mode == 'sandbox' and ag_id != 'taizi':
+        ws = str(sandbox_root / 'agents' / ag_id)
+    else:
+        ws = str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}')
     if ag_id not in existing_ids:
         entry = {'id': ag_id, 'workspace': ws, **{k:v for k,v in ag.items() if k!='id'}}
         agents_list.append(entry)
@@ -189,19 +246,20 @@ PYEOF
 init_data() {
   info "初始化数据目录..."
   
-  mkdir -p "$REPO_DIR/data"
+  DATA_DIR="$(shared_data_dir)"
+  mkdir -p "$DATA_DIR"
   
   # 初始化空文件
   for f in live_status.json agent_config.json model_change_log.json; do
-    if [ ! -f "$REPO_DIR/data/$f" ]; then
-      echo '{}' > "$REPO_DIR/data/$f"
+    if [ ! -f "$DATA_DIR/$f" ]; then
+      echo '{}' > "$DATA_DIR/$f"
     fi
   done
-  echo '[]' > "$REPO_DIR/data/pending_model_changes.json"
+  echo '[]' > "$DATA_DIR/pending_model_changes.json"
 
   # 初始任务文件
-  if [ ! -f "$REPO_DIR/data/tasks_source.json" ]; then
-    python3 << 'PYEOF'
+  if [ ! -f "$DATA_DIR/tasks_source.json" ]; then
+    DATA_DIR="$DATA_DIR" python3 << 'PYEOF'
 import json, pathlib
 tasks = [
     {
@@ -225,24 +283,33 @@ tasks = [
     }
 ]
 import os
-data_dir = pathlib.Path(os.environ.get('REPO_DIR', '.')) / 'data'
+data_dir = pathlib.Path(os.environ.get('DATA_DIR', '.'))
 data_dir.mkdir(exist_ok=True)
 (data_dir / 'tasks_source.json').write_text(json.dumps(tasks, ensure_ascii=False, indent=2))
 print('tasks_source.json 已初始化')
 PYEOF
   fi
 
-  log "数据目录初始化完成: $REPO_DIR/data"
+  log "数据目录初始化完成: $DATA_DIR"
 }
 
 # ── Step 3.3: 创建 data 软链接确保数据一致 (Fix #88) ─────────
 link_resources() {
   info "创建 data/scripts 软链接以确保 Agent 数据一致..."
   
-  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
+  DATA_DIR="$(shared_data_dir)"
+  SCRIPTS_DIR="$(shared_scripts_dir)"
+  [ "$INSTALL_MODE" = "sandbox" ] && mkdir -p "$SANDBOX_ROOT"
+  if [ "$INSTALL_MODE" = "sandbox" ]; then
+    mkdir -p "$DATA_DIR"
+    if [ ! -e "$SCRIPTS_DIR" ]; then
+      ln -s "$REPO_DIR/scripts" "$SCRIPTS_DIR"
+    fi
+  fi
+
   LINKED=0
   for agent in "${AGENTS[@]}"; do
-    ws="$OC_HOME/workspace-$agent"
+    ws="$(agent_workspace "$agent")"
     mkdir -p "$ws"
 
     # 软链接 data 目录：确保各 agent 读写同一份 tasks_source.json
@@ -252,10 +319,10 @@ link_resources() {
     elif [ -d "$ws_data" ]; then
       # 已有 data 目录（非符号链接），备份后替换
       mv "$ws_data" "${ws_data}.bak.$(date +%Y%m%d-%H%M%S)"
-      ln -s "$REPO_DIR/data" "$ws_data"
+      ln -s "$DATA_DIR" "$ws_data"
       LINKED=$((LINKED + 1))
     else
-      ln -s "$REPO_DIR/data" "$ws_data"
+      ln -s "$DATA_DIR" "$ws_data"
       LINKED=$((LINKED + 1))
     fi
 
@@ -265,10 +332,10 @@ link_resources() {
       : # 已是软链接
     elif [ -d "$ws_scripts" ]; then
       mv "$ws_scripts" "${ws_scripts}.bak.$(date +%Y%m%d-%H%M%S)"
-      ln -s "$REPO_DIR/scripts" "$ws_scripts"
+      ln -s "$SCRIPTS_DIR" "$ws_scripts"
       LINKED=$((LINKED + 1))
     else
-      ln -s "$REPO_DIR/scripts" "$ws_scripts"
+      ln -s "$SCRIPTS_DIR" "$ws_scripts"
       LINKED=$((LINKED + 1))
     fi
   done
@@ -280,7 +347,11 @@ link_resources() {
       link_path="$ws_main/$target"
       if [ ! -L "$link_path" ]; then
         [ -d "$link_path" ] && mv "$link_path" "${link_path}.bak.$(date +%Y%m%d-%H%M%S)"
-        ln -s "$REPO_DIR/$target" "$link_path"
+        if [ "$target" = "data" ]; then
+          ln -s "$DATA_DIR" "$link_path"
+        else
+          ln -s "$SCRIPTS_DIR" "$link_path"
+        fi
         LINKED=$((LINKED + 1))
       fi
     done
@@ -346,9 +417,12 @@ sync_auth() {
     return
   fi
 
-  AGENTS=(taizi zhongshu menxia shangshu hubu libu bingbu xingbu gongbu libu_hr zaochao)
   SYNCED=0
-  for agent in "${AGENTS[@]}"; do
+  SYNC_TARGETS=("${AGENTS[@]}")
+  if [ "$INSTALL_MODE" = "sandbox" ]; then
+    SYNC_TARGETS=(taizi)
+  fi
+  for agent in "${SYNC_TARGETS[@]}"; do
     AGENT_DIR="$OC_HOME/agents/$agent/agent"
     if [ -d "$AGENT_DIR" ] || mkdir -p "$AGENT_DIR" 2>/dev/null; then
       cp "$MAIN_AUTH" "$AGENT_DIR/$AUTH_FILENAME"
