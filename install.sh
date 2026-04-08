@@ -5,7 +5,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OC_HOME="$HOME/.openclaw"
+OC_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 OC_CFG="$OC_HOME/openclaw.json"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -129,9 +129,10 @@ register_agents() {
   log "已备份配置: $OC_CFG.bak.*"
 
   python3 << 'PYEOF'
-import json, pathlib, sys
+import json, os as _os, pathlib, sys
 
-cfg_path = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
+_oc_home = pathlib.Path(_os.environ.get('OPENCLAW_HOME', str(pathlib.Path.home() / '.openclaw'))).expanduser()
+cfg_path = _oc_home / 'openclaw.json'
 cfg = json.loads(cfg_path.read_text())
 
 AGENTS = [
@@ -155,7 +156,7 @@ existing_ids = {a['id'] for a in agents_list}
 added = 0
 for ag in AGENTS:
     ag_id = ag['id']
-    ws = str(pathlib.Path.home() / f'.openclaw/workspace-{ag_id}')
+    ws = str(_oc_home / f'workspace-{ag_id}')
     if ag_id not in existing_ids:
         entry = {'id': ag_id, 'workspace': ws, **{k:v for k,v in ag.items() if k!='id'}}
         agents_list.append(entry)

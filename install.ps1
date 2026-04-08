@@ -6,7 +6,7 @@
 $ErrorActionPreference = "Stop"
 
 $REPO_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
-$OC_HOME = Join-Path $env:USERPROFILE ".openclaw"
+$OC_HOME = if ($env:OPENCLAW_HOME) { $env:OPENCLAW_HOME } else { Join-Path $env:USERPROFILE ".openclaw" }
 $OC_CFG = Join-Path $OC_HOME "openclaw.json"
 
 function Write-Banner {
@@ -118,7 +118,10 @@ function Register-Agents {
     $pyScript = @"
 import json, pathlib, sys, os
 
-cfg_path = pathlib.Path(os.environ['USERPROFILE']) / '.openclaw' / 'openclaw.json'
+oc_home = pathlib.Path(
+    os.environ.get('OPENCLAW_HOME', str(pathlib.Path(os.environ['USERPROFILE']) / '.openclaw'))
+).expanduser()
+cfg_path = oc_home / 'openclaw.json'
 cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
 
 AGENTS = [
@@ -142,7 +145,7 @@ existing_ids = {a['id'] for a in agents_list}
 added = 0
 for ag in AGENTS:
     ag_id = ag['id']
-    ws = str(pathlib.Path(os.environ['USERPROFILE']) / f'.openclaw/workspace-{ag_id}')
+    ws = str(oc_home / f'workspace-{ag_id}')
     if ag_id not in existing_ids:
         entry = {'id': ag_id, 'workspace': ws, **{k:v for k,v in ag.items() if k!='id'}}
         agents_list.append(entry)

@@ -3,6 +3,7 @@
 三省六部 · 公共工具函数
 避免 read_json / now_iso 等基础函数在多个脚本中重复定义
 """
+import os
 import json, pathlib, datetime
 
 
@@ -12,6 +13,14 @@ def read_json(path, default=None):
         return json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
     except Exception:
         return default if default is not None else {}
+
+
+def get_openclaw_home() -> pathlib.Path:
+    """Return OpenClaw home directory, respecting OPENCLAW_HOME env var."""
+    env = os.environ.get('OPENCLAW_HOME')
+    if env:
+        return pathlib.Path(env).expanduser()
+    return pathlib.Path.home() / '.openclaw'
 
 
 def now_iso():

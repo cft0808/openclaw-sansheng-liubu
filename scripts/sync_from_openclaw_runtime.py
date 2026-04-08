@@ -6,6 +6,7 @@ import datetime
 import traceback
 import logging
 from file_lock import atomic_json_write, atomic_json_read
+from utils import get_openclaw_home
 
 log = logging.getLogger('sync_runtime')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
@@ -14,7 +15,7 @@ BASE = pathlib.Path(__file__).resolve().parent.parent
 DATA = BASE / 'data'
 DATA.mkdir(exist_ok=True)
 SYNC_STATUS = DATA / 'sync_status.json'
-SESSIONS_ROOT = pathlib.Path.home() / '.openclaw' / 'agents'
+SESSIONS_ROOT = get_openclaw_home() / 'agents'
 
 
 def write_status(**kwargs):

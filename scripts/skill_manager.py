@@ -26,9 +26,9 @@ import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import now_iso, safe_name, read_json
+from utils import get_openclaw_home, now_iso, safe_name, read_json
 
-OCLAW_HOME = Path.home() / '.openclaw'
+OCLAW_HOME = get_openclaw_home()
 
 
 def _download_file(url: str, timeout: int = 30, retries: int = 3) -> str:
@@ -230,8 +230,8 @@ _HUB_BASE_ENV = 'OPENCLAW_SKILLS_HUB_BASE'
 
 def _get_hub_url(skill_name):
     """获取 skill 的 Hub URL，支持环境变量覆盖"""
-    base = (Path.home() / '.openclaw' / 'skills-hub-url').read_text().strip() \
-        if (Path.home() / '.openclaw' / 'skills-hub-url').exists() else None
+    hub_url_file = OCLAW_HOME / 'skills-hub-url'
+    base = hub_url_file.read_text().strip() if hub_url_file.exists() else None
     base = base or os.environ.get(_HUB_BASE_ENV) or OFFICIAL_SKILLS_HUB_BASE
     return f'{base.rstrip("/")}/{skill_name}/SKILL.md'
 
@@ -306,7 +306,7 @@ def import_official_hub(agent_ids: list) -> bool:
         print(f'   1. 检查网络: curl -I {OFFICIAL_SKILLS_HUB_BASE}/code_review/SKILL.md')
         print(f'   2. 设置代理: export https_proxy=http://your-proxy:port')
         print(f'   3. 使用镜像: export {_HUB_BASE_ENV}=https://ghproxy.com/{OFFICIAL_SKILLS_HUB_BASE}')
-        print(f'   4. 自定义源: echo "https://your-mirror/skills" > ~/.openclaw/skills-hub-url')
+        print(f'   4. 自定义源: echo "https://your-mirror/skills" > {OCLAW_HOME / "skills-hub-url"}')
         print(f'   5. 单独重试: python3 scripts/skill_manager.py add-remote --agent <agent> --name <skill> --source <url>')
     return success == total
 
