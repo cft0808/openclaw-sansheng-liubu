@@ -703,7 +703,7 @@
       <span class="ab-scan-status" id="global-scan-status">未巡检</span>
       <button class="ab-scan-detail" id="btn-global-scan-detail" onclick="toggleGlobalScanDetails()" style="display:none">查看巡检详情</button>
       <button class="ab-scan-copy" id="btn-global-scan-copy" onclick="copyGlobalScanReport()" style="display:none">📋 复制巡检报告</button>
-      <button class="ab-archive-all" id="btn-archive-done" onclick="archiveAllDone()" style="display:none">📦 一键归档已完成</button>
+      <button class="ab-archive-all" id="btn-archive-done" onclick="archiveAllDone()" style="display:none">📦 一键归档</button>
     </div>
     <div class="global-scan-detail" id="global-scan-detail"></div>
     <div id="edict-grid" class="edict-grid"></div>
@@ -976,6 +976,15 @@ function isEdict(t){ return /^JJC-/i.test(t.id||'') }
 function isSession(t){ return /^(OC-|MC-)/i.test(t.id||'') }
 // 归档判定：仅检查显式 archived 标记（Done/Cancelled 留在活跃视图，等用户手动归档）
 function isArchived(t){ return !!t.archived }
+// 可归档：终态/Blocked，或 block 为皇上叫停但 state 未写成 Blocked（心跳仍可能显示「活跃」）
+function canArchiveEdict(t){
+  if(t.archived) return false;
+  const st = String(t.state||'').trim();
+  if(/^(done|cancelled|blocked)$/i.test(st)) return true;
+  const b = (t.block||'').trim();
+  if(!b || b==='无' || b==='-') return false;
+  return b.includes('皇上') || b.includes('叫停');
+}
 let edictFilter = 'active';  // 'active' | 'archived' | 'all'
 function setEdictFilter(f){
   edictFilter = f;
@@ -1025,8 +1034,7 @@ function renderEdicts(tasks){
   document.getElementById('chip-tasks').textContent = activeEdicts.length + ' 道旨意';
   // Archive stats
   document.getElementById('archive-count').textContent = `活跃 ${activeEdicts.length} · 归档 ${archivedEdicts.length} · 共 ${allEdicts.length}`;
-  // Show "一键归档" button if there are un-archived Done/Cancelled tasks
-  const unArchivedDone = allEdicts.filter(t=>!t.archived && ['Done','Cancelled'].includes(t.state));
+  const unArchivedDone = allEdicts.filter(t=>canArchiveEdict(t));
   document.getElementById('btn-archive-done').style.display = unArchivedDone.length ? '' : 'none';
   const el = document.getElementById('edict-grid');
   if(!edicts.length){
@@ -1074,7 +1082,7 @@ function renderEdicts(tasks){
         ${canStop ? `<button class="mini-act" onclick="confirmAction('${esc(t.id)}','stop')">⏸ 叫停</button>
         <button class="mini-act danger" onclick="confirmAction('${esc(t.id)}','cancel')">🚫 取消</button>` : ''}
         ${canResume ? `<button class="mini-act" onclick="taskAction('${esc(t.id)}','resume','恢复执行')">▶ 恢复</button>` : ''}
-        ${isArchived(t) && !t.archived ? `<button class="mini-act" onclick="archiveTask('${esc(t.id)}')" title="移入归档">📦 归档</button>` : ''}
+        ${canArchiveEdict(t) ? `<button class="mini-act" onclick="archiveTask('${esc(t.id)}')" title="移入归档">📦 归档</button>` : ''}
         ${t.archived ? `<button class="mini-act" onclick="unarchiveTask('${esc(t.id)}')" title="取消归档">📤 取消归档</button>` : ''}
       </div>
     </div>`;
@@ -1305,6 +1313,8 @@ function openTask(id){
       ${['Review','Menxia'].includes(t.state) ? `<button class="btn-action" style="background:#2ecc8a22;color:#2ecc8a;border:1px solid #2ecc8a44" onclick="reviewAction('${esc(t.id)}','approve')">✅ 准奏</button>
       <button class="btn-action" style="background:#ff527022;color:#ff5270;border:1px solid #ff527044" onclick="reviewAction('${esc(t.id)}','reject')">🚫 封驳</button>` : ''}
       ${['Pending','Taizi','Zhongshu','Menxia','Assigned','Doing','Review','Next'].includes(t.state) ? `<button class="btn-action" style="background:#7c5cfc18;color:#7c5cfc;border:1px solid #7c5cfc44" onclick="advanceState('${esc(t.id)}','${esc(t.state)}')">⏩ 推进到下一步</button>` : ''}
+      ${t.archived ? `<button class="btn-action" style="background:#2ecc8a18;color:#2ecc8a;border:1px solid #2ecc8a44" onclick="unarchiveTask('${esc(t.id)}');closeModal();">📤 取消归档</button>` : ''}
+      ${canArchiveEdict(t) ? `<button class="btn-action" style="background:#6a9eff18;color:#6a9eff;border:1px solid #6a9eff44" onclick="archiveTask('${esc(t.id)}');closeModal();">📦 归档</button>` : ''}
     </div>
 
     <!-- 太子调度 -->
@@ -2675,7 +2685,7 @@ async function unarchiveTask(taskId){
   }catch(e){ toast('服务器连接失败','err'); }
 }
 async function archiveAllDone(){
-  if(!confirm('将所有已完成/已取消的旨意移入归档？')) return;
+  if(!confirm('将已完成、已取消、已阻塞及皇上叫停的旨意移入归档？')) return;
   try{
     const r = await postJ(API+'/archive-task', {archiveAllDone: true});
     if(r.ok){ toast(`📦 ${r.count||0} 道旨意已归档`,'ok'); loadAll(); }
