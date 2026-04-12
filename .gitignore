@@ -35,6 +35,9 @@ edict/frontend/node_modules/
 # Vite cache
 .vite/
 
+# Frontend production build
+edict/frontend/dist/
+
 # IDE
 .vscode/
 

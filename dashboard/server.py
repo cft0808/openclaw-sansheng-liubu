@@ -11,7 +11,7 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -196,6 +196,10 @@ def handle_task_action(task_id, action, reason):
         _scheduler_add_flow(task, f'皇上{action}：{reason or "无"}')
 
     task['updatedAt'] = now_iso()
+    if action in ('stop', 'cancel'):
+        sched = _ensure_scheduler(task)
+        sched['lastDispatchStatus'] = 'aborted-by-user'
+        sched['lastDispatchAt'] = now_iso()
 
     save_tasks(tasks)
     if action == 'resume' and task.get('state') not in _TERMINAL_STATES:
@@ -978,6 +982,60 @@ _ORG_AGENT_MAP = {
 _TERMINAL_STATES = {'Done', 'Cancelled'}
 
 
+def _dispatch_superseded(task_id):
+    """皇上叫停/取消或任务终态后，不应继续自动派发；运行中子进程也应中止。"""
+    tasks = load_tasks()
+    task = next((t for t in tasks if t.get('id') == task_id), None)
+    if not task:
+        return True
+    st = task.get('state', '')
+    return st in _TERMINAL_STATES or st == 'Blocked'
+
+
+def _run_openclaw_dispatch_cmd(cmd, task_id):
+    """运行 openclaw；皇上叫停/取消时终止子进程。返回 ('ok', CompletedProcess) | ('aborted', None) | ('timeout', None)。"""
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        deadline = time.monotonic() + 310
+        while proc.poll() is None:
+            if time.monotonic() > deadline:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+                proc.communicate()
+                return 'timeout', None
+            if _dispatch_superseded(task_id):
+                proc.terminate()
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                proc.communicate()
+                return 'aborted', None
+            time.sleep(0.4)
+        stdout, stderr = proc.communicate()
+        return 'ok', subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    except Exception as e:
+        log.warning(f'⚠️ {task_id} openclaw 派发进程异常: {e}')
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+        try:
+            if proc is not None:
+                proc.communicate()
+        except Exception:
+            pass
+        return 'error', None
+
+
 def _parse_iso(ts):
     if not ts or not isinstance(ts, str):
         return None
@@ -1296,6 +1354,8 @@ def _startup_recover_queued_dispatches():
         task_id = task.get('id', '')
         state = task.get('state', '')
         if not task_id or state in _TERMINAL_STATES or task.get('archived'):
+            continue
+        if state == 'Blocked':
             continue
         sched = task.get('_scheduler') or {}
         if sched.get('lastDispatchStatus') == 'queued':
@@ -2079,6 +2139,19 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchTrigger': trigger,
                 }))
                 return
+            if _dispatch_superseded(task_id):
+                log.info(f'ℹ️ {task_id} 自动派发跳过: 任务已叫停/取消或终态')
+                _update_task_scheduler(task_id, lambda t, s: (
+                    s.update({
+                        'lastDispatchAt': now_iso(),
+                        'lastDispatchStatus': 'aborted-by-user',
+                        'lastDispatchAgent': agent_id,
+                        'lastDispatchTrigger': trigger,
+                        'lastDispatchError': '',
+                    }),
+                    _scheduler_add_flow(t, f'派发未执行：任务已叫停或取消', to=t.get('org', ''))
+                ))
+                return
             # Fix #139/#182: dispatch channel 可配置；未配置时不传 --deliver 避免
             # "unknown channel: feishu" 错误（非飞书用户）
             _agent_cfg = read_json(DATA / 'agent_config.json', {})
@@ -2089,8 +2162,54 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             max_retries = 2
             err = ''
             for attempt in range(1, max_retries + 1):
+                if _dispatch_superseded(task_id):
+                    log.info(f'ℹ️ {task_id} 派发中止: 用户叫停/取消')
+                    _update_task_scheduler(task_id, lambda t, s: (
+                        s.update({
+                            'lastDispatchAt': now_iso(),
+                            'lastDispatchStatus': 'aborted-by-user',
+                            'lastDispatchAgent': agent_id,
+                            'lastDispatchTrigger': trigger,
+                            'lastDispatchError': '',
+                        }),
+                        _scheduler_add_flow(t, f'派发已中止：用户叫停或取消', to=t.get('org', ''))
+                    ))
+                    return
                 log.info(f'🔄 自动派发 {task_id} → {agent_id} (第{attempt}次)...')
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=310)
+                tag, result = _run_openclaw_dispatch_cmd(cmd, task_id)
+                if tag == 'aborted':
+                    log.info(f'ℹ️ {task_id} openclaw 派发已终止（用户叫停/取消）')
+                    _update_task_scheduler(task_id, lambda t, s: (
+                        s.update({
+                            'lastDispatchAt': now_iso(),
+                            'lastDispatchStatus': 'aborted-by-user',
+                            'lastDispatchAgent': agent_id,
+                            'lastDispatchTrigger': trigger,
+                            'lastDispatchError': '',
+                        }),
+                        _scheduler_add_flow(t, f'派发已中止：用户叫停或取消', to=t.get('org', ''))
+                    ))
+                    return
+                if tag == 'timeout':
+                    log.error(f'❌ {task_id} 自动派发超时 → {agent_id}')
+                    _update_task_scheduler(task_id, lambda t, s: (
+                        s.update({
+                            'lastDispatchAt': now_iso(),
+                            'lastDispatchStatus': 'timeout',
+                            'lastDispatchAgent': agent_id,
+                            'lastDispatchTrigger': trigger,
+                            'lastDispatchError': 'timeout',
+                        }),
+                        _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
+                    ))
+                    return
+                if tag == 'error':
+                    err = 'openclaw process error'
+                    log.warning(f'⚠️ {task_id} 自动派发失败(第{attempt}次): {err}')
+                    if attempt < max_retries:
+                        time.sleep(5)
+                    continue
+                assert result is not None
                 if result.returncode == 0:
                     log.info(f'✅ {task_id} 自动派发成功 → {agent_id}')
                     _update_task_scheduler(task_id, lambda t, s: (
@@ -2104,10 +2223,9 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                         _scheduler_add_flow(t, f'派发成功：{agent_id}（{trigger}）', to=t.get('org', ''))
                     ))
                     return
-                err = result.stderr[:200] if result.stderr else result.stdout[:200]
+                err = (result.stderr[:200] if result.stderr else result.stdout[:200]) or ''
                 log.warning(f'⚠️ {task_id} 自动派发失败(第{attempt}次): {err}')
                 if attempt < max_retries:
-                    import time
                     time.sleep(5)
             log.error(f'❌ {task_id} 自动派发最终失败 → {agent_id}')
             _update_task_scheduler(task_id, lambda t, s: (
@@ -2119,18 +2237,6 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchError': err,
                 }),
                 _scheduler_add_flow(t, f'派发失败：{agent_id}（{trigger}）', to=t.get('org', ''))
-            ))
-        except subprocess.TimeoutExpired:
-            log.error(f'❌ {task_id} 自动派发超时 → {agent_id}')
-            _update_task_scheduler(task_id, lambda t, s: (
-                s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'timeout',
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                    'lastDispatchError': 'timeout',
-                }),
-                _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
             ))
         except Exception as e:
             log.warning(f'⚠️ {task_id} 自动派发异常: {e}')
