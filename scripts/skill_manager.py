@@ -243,6 +243,7 @@ OFFICIAL_SKILLS_HUB = {
     'data_analysis': _get_hub_url('data_analysis'),
     'doc_generation': _get_hub_url('doc_generation'),
     'test_framework': _get_hub_url('test_framework'),
+    'mmx_cli': 'https://raw.githubusercontent.com/MiniMax-AI/cli/main/skill/SKILL.md',
 }
 
 SKILL_AGENT_MAPPING = {
@@ -252,6 +253,7 @@ SKILL_AGENT_MAPPING = {
     'data_analysis': ('hubu', 'menxia'),
     'doc_generation': ('libu', 'menxia'),
     'test_framework': ('gongbu', 'xingbu', 'menxia'),
+    'mmx_cli': ('menxia', 'shangshu'),
 }
 
 
