@@ -11,7 +11,7 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, shutil
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -1045,6 +1045,18 @@ def _scheduler_mark_progress(task, note=''):
     sched['lastEscalatedAt'] = None
     if note:
         _scheduler_add_flow(task, f'进展确认：{note}')
+
+
+def _resolve_openclaw_bin():
+    """Return the OpenClaw CLI path used by dashboard dispatch.
+
+    On Windows, npm-installed CLIs are commonly exposed as .cmd shims.  Using
+    shutil.which lets Python resolve that shim before subprocess runs.
+    """
+    configured = os.environ.get('OPENCLAW_BIN', '').strip()
+    if configured:
+        return configured
+    return shutil.which('openclaw')
 
 
 def _update_task_scheduler(task_id, updater):
@@ -2083,7 +2095,22 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             # "unknown channel: feishu" 错误（非飞书用户）
             _agent_cfg = read_json(DATA / 'agent_config.json', {})
             _channel = (_agent_cfg.get('dispatchChannel') or '').strip()
-            cmd = ['openclaw', 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
+            openclaw_bin = _resolve_openclaw_bin()
+            if not openclaw_bin:
+                err = 'OpenClaw CLI 未找到：请确认已安装 openclaw 并加入 PATH；Windows 可设置 OPENCLAW_BIN 指向 openclaw.cmd'
+                log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
+                _update_task_scheduler(task_id, lambda t, s: (
+                    s.update({
+                        'lastDispatchAt': now_iso(),
+                        'lastDispatchStatus': 'openclaw-missing',
+                        'lastDispatchAgent': agent_id,
+                        'lastDispatchTrigger': trigger,
+                        'lastDispatchError': err,
+                    }),
+                    _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
+                ))
+                return
+            cmd = [openclaw_bin, 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
             if _channel:
                 cmd.extend(['--deliver', '--channel', _channel])
             max_retries = 2
@@ -2131,6 +2158,19 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchError': 'timeout',
                 }),
                 _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
+            ))
+        except FileNotFoundError as e:
+            err = f'OpenClaw CLI 未找到：{e}'
+            log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
+            _update_task_scheduler(task_id, lambda t, s: (
+                s.update({
+                    'lastDispatchAt': now_iso(),
+                    'lastDispatchStatus': 'openclaw-missing',
+                    'lastDispatchAgent': agent_id,
+                    'lastDispatchTrigger': trigger,
+                    'lastDispatchError': err[:200],
+                }),
+                _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
             ))
         except Exception as e:
             log.warning(f'⚠️ {task_id} 自动派发异常: {e}')
