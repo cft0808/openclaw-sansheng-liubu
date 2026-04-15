@@ -1382,7 +1382,7 @@ function openTask(id){
           const isOk = (fl.remark||'').includes('✅')||fl.to==='皇上';
           const dotCls = isOk ? 'fl-ok' : (fl.from==='皇上'||fl.to==='皇上') ? 'fl-purple' : 'fl-blue';
           return `<div class="fl-item">
-            <div class="fl-time">${fl.at?fl.at.substring(11,16):''}</div>
+            <div class="fl-time">${fl.at?fmtLocalHM(fl.at):''}</div>
             <div class="fl-dot" style="background:${col}"></div>
             <div class="fl-content">
               <div class="fl-who">
@@ -1771,6 +1771,18 @@ function fmtActivityTime(ts){
   const d = parseDateFlexible(ts);
   if(!d) return '';
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+function fmtLocalHM(ts){
+  const d = parseDateFlexible(ts);
+  if(!d) return '';
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function fmtLocalFull(ts){
+  const d = parseDateFlexible(ts);
+  if(!d) return '';
+  const Y=d.getFullYear(), M=String(d.getMonth()+1).padStart(2,'0'), D=String(d.getDate()).padStart(2,'0');
+  const h=String(d.getHours()).padStart(2,'0'), m=String(d.getMinutes()).padStart(2,'0'), s=String(d.getSeconds()).padStart(2,'0');
+  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
 }
 
 /* ══ MODEL CONFIG ══ */
@@ -2163,7 +2175,7 @@ function openSessionDetail(jsonStr){
         const kLabel = kind==='assistant'?'回复':kind==='tool'?'工具':kind==='user'?'用户':'事件';
         let txt = (a.text||'').replace(/\[\[.*?\]\]/g,'').replace(/\*\*/g,'').trim();
         if(txt.length>200) txt=txt.substring(0,200)+'…';
-        const time = (a.at||'').substring(11,19);
+        const time = fmtActivityTime(a.at);
         return `<div style="padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px;line-height:1.5">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
             <span>${kIcon}</span>
@@ -2768,7 +2780,7 @@ function renderGlobalScanDetails(){
 }
 
 function buildGlobalScanReport(){
-  const checked = globalScanCheckedAt ? globalScanCheckedAt.replace('T',' ').replace('Z','') : '未知时间';
+  const checked = globalScanCheckedAt ? fmtLocalFull(globalScanCheckedAt) || globalScanCheckedAt.replace('T',' ').replace('Z','') : '未知时间';
   const count = Number(globalScanCount || globalScanActions.length || 0);
   const lines = [
     '【太子巡检报告】',
@@ -2934,7 +2946,7 @@ function openMemorial(jsonStr){
             <span class="md-tl-to">→ ${esc(f.to||'')}</span>
           </div>
           <div class="md-tl-remark">${esc(f.remark||'')}</div>
-          <div class="md-tl-time">${esc((f.at||'').substring(0,19).replace('T',' '))}</div>
+          <div class="md-tl-time">${esc(fmtLocalFull(f.at))}</div>
         </div>`;
       }).join('')}</div>
     </div>`;
