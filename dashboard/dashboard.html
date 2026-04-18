@@ -17,13 +17,14 @@
       --acc:#3b82f6;--acc2:#7c3aed;
     }
     *{box-sizing:border-box;margin:0;padding:0}
-    body{background:var(--bg);color:var(--text);font-family:"PingFang SC",Inter,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
+    body{background:var(--bg);color:var(--text);font-family:"PingFang SC",Inter,-apple-system,"Segoe UI",sans-serif;min-height:100vh;transition:background-color .3s ease,color .2s ease}
     ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#1e2538;border-radius:4px}
     html.light ::-webkit-scrollbar-thumb{background:#c4c8d4}
     .theme-toggle{background:var(--panel);border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:16px;padding:4px 10px;color:var(--text);transition:all .15s}
     .theme-toggle:hover{background:var(--panel2)}
 
     .wrap{max-width:1400px;margin:0 auto;padding:16px}
+    .wrap,.chip{transition:background-color .3s ease,color .2s ease,border-color .2s ease}
 
     /* HEADER */
     .hdr{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
@@ -38,7 +39,7 @@
 
     /* TABS */
     .tabs{display:flex;gap:2px;margin-bottom:18px;border-bottom:1px solid var(--line);overflow-x:auto}
-    .tab{font-size:13px;padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;color:var(--muted);border:1px solid transparent;border-bottom:none;white-space:nowrap;position:relative;bottom:-1px;transition:all .15s;user-select:none}
+    .tab{font-size:13px;padding:8px 16px;border-radius:8px 8px 0 0;cursor:pointer;color:var(--muted);border:1px solid transparent;border-bottom:none;white-space:nowrap;position:relative;bottom:-1px;transition:background-color .3s ease,color .2s ease,border-color .2s ease;user-select:none}
     .tab:hover{color:var(--text);background:var(--panel)}
     .tab.active{color:var(--text);background:var(--panel);border-color:var(--line);font-weight:600}
     .tbadge{font-size:10px;padding:1px 5px;border-radius:999px;background:#1a2040;color:var(--acc);margin-left:4px}
@@ -46,7 +47,15 @@
 
     /* ══ 旨意看板 ══ */
     .edict-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
-    .edict-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;cursor:pointer;transition:border-color .15s,transform .1s,box-shadow .15s}
+    .edict-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;cursor:pointer;transition:background-color .3s ease,color .2s ease,border-color .15s,transform .1s,box-shadow .15s}
+    @keyframes fadeSlideIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .edict-card{animation:fadeSlideIn .3s ease both}
+    .edict-grid .edict-card:nth-child(1){animation-delay:0s}
+    .edict-grid .edict-card:nth-child(2){animation-delay:.05s}
+    .edict-grid .edict-card:nth-child(3){animation-delay:.06s}
+    .edict-grid .edict-card:nth-child(4){animation-delay:.08s}
+    .edict-grid .edict-card:nth-child(5){animation-delay:.1s}
+    .edict-grid .edict-card:nth-child(n+6){animation-delay:.12s}
     .edict-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 4px 20px rgba(106,158,255,.1)}
 
     /* pipeline strip on card */
@@ -149,7 +158,7 @@
 
     /* ══ 省部调度 tab ══ */
     .duty-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}
-    .duty-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;transition:border-color .15s}
+    .duty-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;transition:background-color .3s ease,color .2s ease,border-color .15s}
     .duty-card:hover{border-color:#2e3d6a}
     .duty-card.active-card{border-color:var(--acc)}
     .duty-card.blocked-card{border-color:#ff527055}
@@ -236,7 +245,7 @@
     .sess-filter:hover{border-color:var(--acc);color:var(--text)}
     .sess-filter.active{border-color:var(--acc);color:var(--acc);background:#0a1228}
     .sess-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
-    .sess-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;transition:border-color .12s}
+    .sess-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;transition:background-color .3s ease,color .2s ease,border-color .12s}
     .sess-card:hover{border-color:#2e3d6a}
     .sc-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
     .sc-emoji{font-size:20px}
@@ -647,6 +656,11 @@
     .tpl-field{margin-bottom:14px}
     .tpl-label{font-size:12px;font-weight:600;display:block;margin-bottom:6px}
     .tpl-input{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:13px;outline:none}
+
+    @media(prefers-reduced-motion:reduce){
+      .edict-card{animation:none!important}
+      *{transition-duration:0s!important}
+    }
   </style>
 </head>
 <body>
@@ -969,6 +983,28 @@ function stateLabel(t){
   return STATE_LABEL[t.state]||t.state;
 }
 
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+function animateCounter(el, target, format=v=>String(v)) {
+  if(!el) return;
+  const next = Number(target) || 0;
+  if(prefersReducedMotion.matches){
+    el.textContent = format(next);
+    el.dataset.counterValue = String(next);
+    return;
+  }
+  const start = Number(el.dataset.counterValue || 0);
+  const duration = 600;
+  const startTime = performance.now();
+  function step(now) {
+    const progress = Math.min((now - startTime) / duration, 1);
+    const value = Math.floor(start + (next - start) * progress);
+    el.textContent = format(value);
+    if(progress < 1) requestAnimationFrame(step);
+    else el.dataset.counterValue = String(next);
+  }
+  requestAnimationFrame(step);
+}
+
 /* ══ TASK CLASSIFICATION ══ */
 // 皇上的旨意：JJC-* 开头，有真实标题
 function isEdict(t){ return /^JJC-/i.test(t.id||'') }
@@ -1021,7 +1057,7 @@ function renderEdicts(tasks){
     return (order[a.state]??9) - (order[b.state]??9);
   });
   // Tab badge = active count only
-  document.getElementById('tb-e').textContent = activeEdicts.length;
+  animateCounter(document.getElementById('tb-e'), activeEdicts.length);
   document.getElementById('chip-tasks').textContent = activeEdicts.length + ' 道旨意';
   // Archive stats
   document.getElementById('archive-count').textContent = `活跃 ${activeEdicts.length} · 归档 ${archivedEdicts.length} · 共 ${allEdicts.length}`;
@@ -1248,7 +1284,7 @@ function renderMonitor(tasks){
     </div>`;
   });
 
-  document.getElementById('tb-m').textContent = activeCount + '活跃';
+  animateCounter(document.getElementById('tb-m'), activeCount, v=>v + '活跃');
   document.getElementById('duty-grid').innerHTML = cards.join('');
 }
 
@@ -2079,7 +2115,7 @@ function renderSessions(tasks){
     });
   }
   const sessions = tasks.filter(t=>!isEdict(t));
-  document.getElementById('tb-s').textContent = sessions.length;
+  animateCounter(document.getElementById('tb-s'), sessions.length);
   // apply filter
   let filtered = sessions;
   if(sessFilter === 'active') filtered = sessions.filter(t=>!['Done','Cancelled'].includes(t.state));
@@ -2890,7 +2926,7 @@ function renderMemorials(){
   // Only JJC edicts that are Done or Cancelled
   let mems = tasks.filter(t=>(t.id||'').startsWith('JJC-') && ['Done','Cancelled'].includes(t.state));
   if(filter!=='all') mems = mems.filter(t=>t.state===filter);
-  document.getElementById('tb-mem').textContent = mems.length;
+  animateCounter(document.getElementById('tb-mem'), mems.length);
 
   const el = document.getElementById('mem-list');
   if(!mems.length){ el.innerHTML='<div class="mem-empty">暂无奏折 — 任务完成后自动生成</div>'; return; }
