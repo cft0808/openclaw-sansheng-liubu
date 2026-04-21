@@ -284,7 +284,7 @@ docker compose up
 
 #### 前置条件
 - [OpenClaw](https://openclaw.ai) 已安装
-- Python 3.9+
+- Python 3.10+
 - macOS / Linux
 
 #### 安装

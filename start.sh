@@ -9,11 +9,27 @@ cd "$REPO_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
-# 检查 Python
-if ! command -v python3 &>/dev/null; then
-  echo -e "${RED}❌ 未找到 python3，请先安装 Python 3.9+${NC}"
+resolve_python() {
+  local candidate version major minor
+  for candidate in "${EDICT_PYTHON:-}" python3.12 python3.11 python3.10 python3; do
+    [ -n "$candidate" ] || continue
+    command -v "$candidate" &>/dev/null || continue
+    version=$("$candidate" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null) || continue
+    major=${version%%.*}
+    minor=${version#*.}
+    if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PYTHON_BIN=$(resolve_python) || {
+  echo -e "${RED}❌ 未找到可用的 Python 3.10+（当前项目实际需要 3.10+）${NC}"
   exit 1
-fi
+}
+export EDICT_PYTHON="$PYTHON_BIN"
 
 # 确保 data 目录存在
 mkdir -p "$REPO_DIR/data"
@@ -57,7 +73,8 @@ fi
 
 # 启动看板服务器
 echo -e "${GREEN}▶ 启动看板服务器...${NC}"
-python3 dashboard/server.py &
+echo -e "${GREEN}   使用 Python: ${PYTHON_BIN} ($($PYTHON_BIN --version 2>&1))${NC}"
+"$PYTHON_BIN" dashboard/server.py &
 SERVER_PID=$!
 
 sleep 1
