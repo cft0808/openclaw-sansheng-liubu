@@ -142,7 +142,12 @@ def load_tasks():
 def save_tasks(tasks):
     task_data_dir = get_task_data_dir()
     atomic_json_write(task_data_dir / 'tasks_source.json', tasks)
-    # Trigger refresh (异步，不阻塞，避免僵尸进程)
+    _trigger_refresh()
+
+
+def _trigger_refresh():
+    """Trigger live data refresh in background."""
+    task_data_dir = get_task_data_dir()
     script = task_data_dir.parent / 'scripts' / 'refresh_live_data.py'
     if not script.exists():
         script = SCRIPTS / 'refresh_live_data.py'
@@ -153,6 +158,43 @@ def save_tasks(tasks):
         except Exception as e:
             log.warning(f'refresh_live_data.py 触发失败: {e}')
     threading.Thread(target=_refresh, daemon=True).start()
+
+
+def modify_tasks(modifier):
+    """Atomically read-modify-write the tasks file.
+
+    ``modifier(tasks)`` receives the current task list, mutates it in place
+    (or returns a new list), and the result is persisted while the file lock
+    is held.  This avoids the TOCTOU race inherent in separate
+    ``load_tasks()`` / ``save_tasks()`` calls when background threads
+    (dispatch callbacks, periodic scanner) and the HTTP handler mutate tasks
+    concurrently.
+    """
+    task_data_dir = get_task_data_dir()
+    path = task_data_dir / 'tasks_source.json'
+    atomic_json_update(path, modifier, default=[])
+    _trigger_refresh()
+
+
+def modify_task(task_id, updater):
+    """Atomically update a single task identified by *task_id*.
+
+    ``updater(task)`` receives the task dict and should mutate it in place.
+    Returns ``True`` if the task was found and updated, ``False`` otherwise.
+    """
+    found = [False]
+
+    def _modifier(tasks):
+        task = next((t for t in tasks if t.get('id') == task_id), None)
+        if task is None:
+            return tasks
+        updater(task)
+        task['updatedAt'] = now_iso()
+        found[0] = True
+        return tasks
+
+    modify_tasks(_modifier)
+    return found[0]
 
 
 def handle_task_action(task_id, action, reason):
@@ -1070,15 +1112,17 @@ def _resolve_openclaw_bin():
 
 
 def _update_task_scheduler(task_id, updater):
-    tasks = load_tasks()
-    task = next((t for t in tasks if t.get('id') == task_id), None)
-    if not task:
-        return False
-    sched = _ensure_scheduler(task)
-    updater(task, sched)
-    task['updatedAt'] = now_iso()
-    save_tasks(tasks)
-    return True
+    """Atomically update a task's scheduler state.
+
+    Uses ``modify_task`` to hold the file lock for the entire
+    read-modify-write cycle, preventing concurrent dispatch threads and
+    the periodic scanner from clobbering each other's writes.
+    """
+    def _apply(task):
+        sched = _ensure_scheduler(task)
+        updater(task, sched)
+
+    return modify_task(task_id, _apply)
 
 
 def get_scheduler_state(task_id):
@@ -1104,6 +1148,7 @@ def get_scheduler_state(task_id):
 
 
 def handle_scheduler_retry(task_id, reason=''):
+    # Pre-check before acquiring lock (avoids holding lock for error paths)
     tasks = load_tasks()
     task = next((t for t in tasks if t.get('id') == task_id), None)
     if not task:
@@ -1112,16 +1157,24 @@ def handle_scheduler_retry(task_id, reason=''):
     if state in _TERMINAL_STATES or state == 'Blocked':
         return {'ok': False, 'error': f'任务 {task_id} 当前状态 {state} 不支持重试'}
 
-    sched = _ensure_scheduler(task)
-    sched['retryCount'] = int(sched.get('retryCount') or 0) + 1
-    sched['lastRetryAt'] = now_iso()
-    sched['lastDispatchTrigger'] = 'taizi-retry'
-    _scheduler_add_flow(task, f'触发重试第{sched["retryCount"]}次：{reason or "超时未推进"}')
-    task['updatedAt'] = now_iso()
-    save_tasks(tasks)
+    result = {'retryCount': 0, 'state': state}
 
-    dispatch_for_state(task_id, task, state, trigger='taizi-retry')
-    return {'ok': True, 'message': f'{task_id} 已触发重试派发', 'retryCount': sched['retryCount']}
+    def _apply(task):
+        cur = task.get('state', '')
+        if cur in _TERMINAL_STATES or cur == 'Blocked':
+            return  # state changed between pre-check and lock; skip
+        sched = _ensure_scheduler(task)
+        sched['retryCount'] = int(sched.get('retryCount') or 0) + 1
+        sched['lastRetryAt'] = now_iso()
+        sched['lastDispatchTrigger'] = 'taizi-retry'
+        _scheduler_add_flow(task, f'触发重试第{sched["retryCount"]}次：{reason or "超时未推进"}')
+        result['retryCount'] = sched['retryCount']
+        result['state'] = cur
+
+    modify_task(task_id, _apply)
+
+    dispatch_for_state(task_id, task, result['state'], trigger='taizi-retry')
+    return {'ok': True, 'message': f'{task_id} 已触发重试派发', 'retryCount': result['retryCount']}
 
 
 def handle_scheduler_escalate(task_id, reason=''):
@@ -1159,6 +1212,7 @@ def handle_scheduler_escalate(task_id, reason=''):
 
 
 def handle_scheduler_rollback(task_id, reason=''):
+    # Pre-check before acquiring lock
     tasks = load_tasks()
     task = next((t for t in tasks if t.get('id') == task_id), None)
     if not task:
@@ -1169,115 +1223,142 @@ def handle_scheduler_rollback(task_id, reason=''):
     if not snap_state:
         return {'ok': False, 'error': f'任务 {task_id} 无可用回滚快照'}
 
-    old_state = task.get('state', '')
-    task['state'] = snap_state
-    task['org'] = snapshot.get('org', task.get('org', ''))
-    task['now'] = f'↩️ 太子调度自动回滚：{reason or "恢复到上个稳定节点"}'
-    task['block'] = '无'
-    sched['retryCount'] = 0
-    sched['escalationLevel'] = 0
-    sched['stallSince'] = None
-    sched['lastProgressAt'] = now_iso()
-    _scheduler_add_flow(task, f'执行回滚：{old_state} → {snap_state}，原因：{reason or "停滞恢复"}')
-    task['updatedAt'] = now_iso()
-    save_tasks(tasks)
+    result = {'snap_state': snap_state}
 
-    if snap_state not in _TERMINAL_STATES:
-        dispatch_for_state(task_id, task, snap_state, trigger='taizi-rollback')
+    def _apply(task):
+        sched = _ensure_scheduler(task)
+        snapshot = sched.get('snapshot') or {}
+        s_state = snapshot.get('state')
+        if not s_state:
+            return  # snapshot cleared between pre-check and lock
+        old_state = task.get('state', '')
+        task['state'] = s_state
+        task['org'] = snapshot.get('org', task.get('org', ''))
+        task['now'] = f'↩️ 太子调度自动回滚：{reason or "恢复到上个稳定节点"}'
+        task['block'] = '无'
+        sched['retryCount'] = 0
+        sched['escalationLevel'] = 0
+        sched['stallSince'] = None
+        sched['lastProgressAt'] = now_iso()
+        _scheduler_add_flow(task, f'执行回滚：{old_state} → {s_state}，原因：{reason or "停滞恢复"}')
+        result['snap_state'] = s_state
 
-    return {'ok': True, 'message': f'{task_id} 已回滚到 {snap_state}'}
+    modify_task(task_id, _apply)
+
+    if result['snap_state'] not in _TERMINAL_STATES:
+        dispatch_for_state(task_id, task, result['snap_state'], trigger='taizi-rollback')
+
+    return {'ok': True, 'message': f'{task_id} 已回滚到 {result["snap_state"]}'}
 
 
 def handle_scheduler_scan(threshold_sec=600):
+    """Periodic stall scanner — runs in a background thread.
+
+    Uses ``modify_tasks`` to hold the file lock during the mutation phase,
+    preventing concurrent dispatch callbacks and HTTP handlers from
+    clobbering each other's writes (fixes TOCTOU race between the old
+    ``load_tasks()`` / ``save_tasks()`` pair).
+
+    Side-effects (dispatch, escalation wake) are executed *after* the lock
+    is released so they don't block other writers.
+    """
     threshold_sec = max(60, int(threshold_sec or 600))
-    tasks = load_tasks()
     now_dt = datetime.datetime.now(datetime.timezone.utc)
+    # Collect dispatch/escalation work to execute after the lock is released
     pending_retries = []
     pending_escalates = []
     pending_rollbacks = []
     actions = []
-    changed = False
 
-    for task in tasks:
-        task_id = task.get('id', '')
-        state = task.get('state', '')
-        if not task_id or state in _TERMINAL_STATES or task.get('archived'):
-            continue
-        if state == 'Blocked':
-            continue
+    def _scan(tasks):
+        changed = False
+        for task in tasks:
+            task_id = task.get('id', '')
+            state = task.get('state', '')
+            if not task_id or state in _TERMINAL_STATES or task.get('archived'):
+                continue
+            if state == 'Blocked':
+                continue
 
-        sched = _ensure_scheduler(task)
-        task_threshold = int(sched.get('stallThresholdSec') or threshold_sec)
-        last_progress = _parse_iso(sched.get('lastProgressAt') or task.get('updatedAt'))
-        if not last_progress:
-            continue
-        stalled_sec = max(0, int((now_dt - last_progress).total_seconds()))
-        if stalled_sec < task_threshold:
-            continue
+            sched = _ensure_scheduler(task)
+            task_threshold = int(sched.get('stallThresholdSec') or threshold_sec)
+            last_progress = _parse_iso(sched.get('lastProgressAt') or task.get('updatedAt'))
+            if not last_progress:
+                continue
+            stalled_sec = max(0, int((now_dt - last_progress).total_seconds()))
+            if stalled_sec < task_threshold:
+                continue
 
-        if not sched.get('stallSince'):
-            sched['stallSince'] = now_iso()
-            changed = True
-
-        retry_count = int(sched.get('retryCount') or 0)
-        max_retry = max(0, int(sched.get('maxRetry') or 1))
-        level = int(sched.get('escalationLevel') or 0)
-
-        if retry_count < max_retry:
-            sched['retryCount'] = retry_count + 1
-            sched['lastRetryAt'] = now_iso()
-            sched['lastDispatchTrigger'] = 'taizi-scan-retry'
-            _scheduler_add_flow(task, f'停滞{stalled_sec}秒，触发自动重试第{sched["retryCount"]}次')
-            pending_retries.append((task_id, state))
-            actions.append({'taskId': task_id, 'action': 'retry', 'stalledSec': stalled_sec})
-            changed = True
-            continue
-
-        if level < 2:
-            next_level = level + 1
-            target = 'menxia' if next_level == 1 else 'shangshu'
-            target_label = '门下省' if next_level == 1 else '尚书省'
-            sched['escalationLevel'] = next_level
-            sched['lastEscalatedAt'] = now_iso()
-            _scheduler_add_flow(task, f'停滞{stalled_sec}秒，升级至{target_label}协调', to=target_label)
-            pending_escalates.append((task_id, state, target, target_label, stalled_sec))
-            actions.append({'taskId': task_id, 'action': 'escalate', 'to': target_label, 'stalledSec': stalled_sec})
-            changed = True
-            continue
-
-        if sched.get('autoRollback', True):
-            rollback_count = int(sched.get('rollbackCount') or 0)
-            max_rollback = int(sched.get('maxRollback') or 3)
-            snapshot = sched.get('snapshot') or {}
-            snap_state = snapshot.get('state')
-            if rollback_count >= max_rollback:
-                # 已达最大回滚次数，标记 Blocked 避免无限循环
-                if state != 'Blocked':
-                    task['state'] = 'Blocked'
-                    task['now'] = f'🚫 连续回滚{rollback_count}次仍无法推进，已自动挂起'
-                    task['block'] = f'连续停滞且回滚{rollback_count}次均失败，需人工介入'
-                    sched['stallSince'] = None
-                    _scheduler_add_flow(task, f'连续回滚{rollback_count}次，自动挂起等待人工介入')
-                    actions.append({'taskId': task_id, 'action': 'blocked', 'reason': f'max rollback {rollback_count}'})
-                    changed = True
-            elif snap_state and snap_state != state:
-                old_state = state
-                task['state'] = snap_state
-                task['org'] = snapshot.get('org', task.get('org', ''))
-                task['now'] = '↩️ 太子调度自动回滚到稳定节点'
-                task['block'] = '无'
-                sched['retryCount'] = 0
-                sched['escalationLevel'] = 0
-                sched['rollbackCount'] = rollback_count + 1
-                sched['stallSince'] = None
-                sched['lastProgressAt'] = now_iso()
-                _scheduler_add_flow(task, f'连续停滞，自动回滚：{old_state} → {snap_state}（第{rollback_count + 1}次）')
-                pending_rollbacks.append((task_id, snap_state))
-                actions.append({'taskId': task_id, 'action': 'rollback', 'toState': snap_state})
+            if not sched.get('stallSince'):
+                sched['stallSince'] = now_iso()
                 changed = True
 
-    if changed:
-        save_tasks(tasks)
+            retry_count = int(sched.get('retryCount') or 0)
+            max_retry = max(0, int(sched.get('maxRetry') or 1))
+            level = int(sched.get('escalationLevel') or 0)
+
+            if retry_count < max_retry:
+                sched['retryCount'] = retry_count + 1
+                sched['lastRetryAt'] = now_iso()
+                sched['lastDispatchTrigger'] = 'taizi-scan-retry'
+                _scheduler_add_flow(task, f'停滞{stalled_sec}秒，触发自动重试第{sched["retryCount"]}次')
+                pending_retries.append((task_id, state))
+                actions.append({'taskId': task_id, 'action': 'retry', 'stalledSec': stalled_sec})
+                changed = True
+                continue
+
+            if level < 2:
+                next_level = level + 1
+                target = 'menxia' if next_level == 1 else 'shangshu'
+                target_label = '门下省' if next_level == 1 else '尚书省'
+                sched['escalationLevel'] = next_level
+                sched['lastEscalatedAt'] = now_iso()
+                _scheduler_add_flow(task, f'停滞{stalled_sec}秒，升级至{target_label}协调', to=target_label)
+                pending_escalates.append((task_id, state, target, target_label, stalled_sec))
+                actions.append({'taskId': task_id, 'action': 'escalate', 'to': target_label, 'stalledSec': stalled_sec})
+                changed = True
+                continue
+
+            if sched.get('autoRollback', True):
+                rollback_count = int(sched.get('rollbackCount') or 0)
+                max_rollback = int(sched.get('maxRollback') or 3)
+                snapshot = sched.get('snapshot') or {}
+                snap_state = snapshot.get('state')
+                if rollback_count >= max_rollback:
+                    if state != 'Blocked':
+                        task['state'] = 'Blocked'
+                        task['now'] = f'🚫 连续回滚{rollback_count}次仍无法推进，已自动挂起'
+                        task['block'] = f'连续停滞且回滚{rollback_count}次均失败，需人工介入'
+                        sched['stallSince'] = None
+                        _scheduler_add_flow(task, f'连续回滚{rollback_count}次，自动挂起等待人工介入')
+                        actions.append({'taskId': task_id, 'action': 'blocked', 'reason': f'max rollback {rollback_count}'})
+                        changed = True
+                elif snap_state and snap_state != state:
+                    old_state = state
+                    task['state'] = snap_state
+                    task['org'] = snapshot.get('org', task.get('org', ''))
+                    task['now'] = '↩️ 太子调度自动回滚到稳定节点'
+                    task['block'] = '无'
+                    sched['retryCount'] = 0
+                    sched['escalationLevel'] = 0
+                    sched['rollbackCount'] = rollback_count + 1
+                    sched['stallSince'] = None
+                    sched['lastProgressAt'] = now_iso()
+                    _scheduler_add_flow(task, f'连续停滞，自动回滚：{old_state} → {snap_state}（第{rollback_count + 1}次）')
+                    pending_rollbacks.append((task_id, snap_state))
+                    actions.append({'taskId': task_id, 'action': 'rollback', 'toState': snap_state})
+                    changed = True
+
+        return tasks  # always return — atomic_json_update requires it
+
+    modify_tasks(_scan)
+
+    # --- Side-effects: dispatch & escalation (outside the file lock) ---
+
+    # Re-read tasks for dispatch context (the task objects from _scan are
+    # no longer held under the lock, but dispatch only needs id + state +
+    # title which are immutable at this point).
+    tasks = load_tasks()
 
     for task_id, state in pending_retries:
         retry_task = next((t for t in tasks if t.get('id') == task_id), None)
