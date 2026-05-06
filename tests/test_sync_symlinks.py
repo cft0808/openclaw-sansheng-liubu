@@ -43,6 +43,7 @@ def project(tmp_path, monkeypatch):
     # Patch module-level state
     monkeypatch.setattr(sac, 'BASE', proj)
     monkeypatch.setattr(sac, '_SOUL_DEPLOY_MAP', {'agent-a': 'aaa'})
+    monkeypatch.setattr(sac, 'OPENCLAW_HOME', home / '.openclaw')
     monkeypatch.setattr(pathlib.Path, 'home', staticmethod(lambda: home))
 
     return types.SimpleNamespace(root=proj, scripts=scripts, data=data, home=home)

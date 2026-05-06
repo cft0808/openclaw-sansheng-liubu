@@ -272,6 +272,25 @@ def handle_archive_task(task_id, archived, archive_all_done=False):
     return {'ok': True, 'message': f'{task_id} {label}'}
 
 
+def handle_delete_archived(task_id=None, delete_all=False):
+    """Permanently delete a single archived task or all archived tasks."""
+    tasks = load_tasks()
+    if delete_all:
+        before = len(tasks)
+        tasks = [t for t in tasks if not t.get('archived')]
+        count = before - len(tasks)
+        save_tasks(tasks)
+        return {'ok': True, 'message': f'{count} 道已归档旨意已永久删除', 'count': count}
+    task = next((t for t in tasks if t.get('id') == task_id), None)
+    if not task:
+        return {'ok': False, 'error': f'任务 {task_id} 不存在'}
+    if not task.get('archived'):
+        return {'ok': False, 'error': f'任务 {task_id} 未归档，无法删除'}
+    tasks = [t for t in tasks if t.get('id') != task_id]
+    save_tasks(tasks)
+    return {'ok': True, 'message': f'{task_id} 已永久删除'}
+
+
 def update_task_todos(task_id, todos):
     """Update the todos list for a task."""
     tasks = load_tasks()
@@ -2738,6 +2757,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': False, 'error': 'taskId or archiveAllDone required'}, 400)
                 return
             result = handle_archive_task(task_id, archived, archive_all)
+            self.send_json(result)
+            return
+
+        if p == '/api/delete-archived':
+            task_id = body.get('taskId', '').strip() if body.get('taskId') else ''
+            delete_all = body.get('deleteAll', False)
+            if not task_id and not delete_all:
+                self.send_json({'ok': False, 'error': 'taskId or deleteAll required'}, 400)
+                return
+            result = handle_delete_archived(task_id, delete_all)
             self.send_json(result)
             return
 
