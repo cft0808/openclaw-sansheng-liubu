@@ -302,11 +302,13 @@ def cmd_create(task_id, title, state, org, official, remark=None):
     def modifier(tasks):
         existing = next((t for t in tasks if t.get('id') == task_id), None)
         if existing:
-            if existing.get('state') in ('Done', 'Cancelled'):
-                log.warning(f'⚠️ 任务 {task_id} 已完结 (state={existing["state"]})，不可覆盖')
+            ex_state = existing.get('state')
+            if ex_state in ('Done', 'Cancelled', 'Review', 'Doing', 'Next',
+                            'Zhongshu', 'Menxia', 'Assigned', 'Blocked'):
+                log.warning(f'⚠️ 任务 {task_id} 已在流转中 (state={ex_state})，不可覆盖')
                 return tasks
-            if existing.get('state') not in (None, '', 'Inbox', 'Pending'):
-                log.warning(f'任务 {task_id} 已存在 (state={existing["state"]})，将被覆盖')
+            if ex_state not in (None, '', 'Inbox', 'Pending'):
+                log.warning(f'任务 {task_id} 已存在 (state={ex_state})，将被覆盖')
         tasks = [t for t in tasks if t.get('id') != task_id]
         tasks.insert(0, {
             "id": task_id, "title": title, "official": official,

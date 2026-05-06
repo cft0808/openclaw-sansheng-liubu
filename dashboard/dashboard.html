@@ -718,6 +718,7 @@
       <button class="ab-scan-detail" id="btn-global-scan-detail" onclick="toggleGlobalScanDetails()" style="display:none">查看巡检详情</button>
       <button class="ab-scan-copy" id="btn-global-scan-copy" onclick="copyGlobalScanReport()" style="display:none">📋 复制巡检报告</button>
       <button class="ab-archive-all" id="btn-archive-done" onclick="archiveAllDone()" style="display:none">📦 一键归档已完成</button>
+      <button class="ab-archive-all" id="btn-delete-archived" onclick="deleteAllArchived()" style="display:none">🗑 清空已归档</button>
     </div>
     <div class="global-scan-detail" id="global-scan-detail"></div>
     <div id="edict-grid" class="edict-grid"></div>
@@ -1064,6 +1065,7 @@ function renderEdicts(tasks){
   // Show "一键归档" button if there are un-archived Done/Cancelled tasks
   const unArchivedDone = allEdicts.filter(t=>!t.archived && ['Done','Cancelled'].includes(t.state));
   document.getElementById('btn-archive-done').style.display = unArchivedDone.length ? '' : 'none';
+  document.getElementById('btn-delete-archived').style.display = archivedEdicts.length ? '' : 'none';
   const el = document.getElementById('edict-grid');
   if(!edicts.length){
     el.innerHTML='<div class="empty" style="grid-column:1/-1">暂无旨意<br><small style="font-size:11px;margin-top:6px;display:block;color:var(--muted)">通过飞书向太子发送任务，太子分拣后转中书省处理</small></div>';
@@ -1111,7 +1113,8 @@ function renderEdicts(tasks){
         <button class="mini-act danger" onclick="confirmAction('${esc(t.id)}','cancel')">🚫 取消</button>` : ''}
         ${canResume ? `<button class="mini-act" onclick="taskAction('${esc(t.id)}','resume','恢复执行')">▶ 恢复</button>` : ''}
         ${isArchived(t) && !t.archived ? `<button class="mini-act" onclick="archiveTask('${esc(t.id)}')" title="移入归档">📦 归档</button>` : ''}
-        ${t.archived ? `<button class="mini-act" onclick="unarchiveTask('${esc(t.id)}')" title="取消归档">📤 取消归档</button>` : ''}
+        ${t.archived ? `<button class="mini-act" onclick="unarchiveTask('${esc(t.id)}')" title="取消归档">📤 取消归档</button>
+        <button class="mini-act danger" onclick="deleteArchivedTask('${esc(t.id)}')" title="永久删除">🗑 删除</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -2728,6 +2731,24 @@ async function archiveAllDone(){
     const r = await postJ(API+'/archive-task', {archiveAllDone: true});
     if(r.ok){ toast(`📦 ${r.count||0} 道旨意已归档`,'ok'); loadAll(); }
     else toast(r.error||'批量归档失败','err');
+  }catch(e){ toast('服务器连接失败','err'); }
+}
+
+/* ══ DELETE ARCHIVED ══ */
+async function deleteArchivedTask(taskId){
+  if(!confirm(`确认永久删除 ${taskId}？此操作不可撤销！`)) return;
+  try{
+    const r = await postJ(API+'/delete-archived', {taskId});
+    if(r.ok){ toast(`🗑 ${taskId} 已永久删除`,'ok'); loadAll(); }
+    else toast(r.error||'删除失败','err');
+  }catch(e){ toast('服务器连接失败','err'); }
+}
+async function deleteAllArchived(){
+  if(!confirm('⚠️ 确认永久删除所有已归档旨意？此操作不可撤销！')) return;
+  try{
+    const r = await postJ(API+'/delete-archived', {deleteAll: true});
+    if(r.ok){ toast(`🗑 ${r.count||0} 道已归档旨意已永久删除`,'ok'); loadAll(); }
+    else toast(r.error||'批量删除失败','err');
   }catch(e){ toast('服务器连接失败','err'); }
 }
 
