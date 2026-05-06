@@ -157,7 +157,31 @@ http://127.0.0.1:7891
 
 ---
 
-## 3. `agents.json` 是干什么用的\r\n\r\n本仓库附带了一个脱敏版的：\r\n\r\n```text\r\nagents.json\r\n```\r\n\r\n它保留了三省六部 agent 的配置结构，包括：\r\n\r\n- `id`\r\n- `name`\r\n- `workspace`\r\n- `agentDir`\r\n- `subagents.allowAgents`\r\n\r\n其中路径部分已经用 `<YOUR_USER>` 做了脱敏处理。\r\n\r\n使用时请先把：\r\n\r\n```text\r\n<YOUR_USER>\r\n```\r\n\r\n替换成你自己的 Windows 用户名，再复制到对应配置中。\r\n\r\n---\r\n\r\n## 4. 为什么还要确认 `tools.sessions.visibility = all`
+## 3. `agents.json` 是干什么用的
+
+本仓库附带了一个脱敏版的：
+```text
+agents.json```
+
+它保留了三省六部 agent 的配置结构，包括：
+- `id`
+- `name`
+- `workspace`
+- `agentDir`
+- `subagents.allowAgents`
+
+其中路径部分已经用 `<YOUR_USER>` 做了脱敏处理。
+
+使用时请先把：
+
+```text
+<YOUR_USER>```
+
+替换成你自己的 Windows 用户名，再复制到对应配置中。
+
+---
+
+## 4. 为什么还要确认 `tools.sessions.visibility = all`
 
 这个设置会影响 session 工具可见性，对多 agent 协同很重要。
 
