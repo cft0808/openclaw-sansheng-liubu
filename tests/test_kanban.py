@@ -46,6 +46,32 @@ def test_move_state(tmp_path):
         kb.TASKS_FILE = original
 
 
+def test_idempotent_state_is_heartbeat_without_resetting_retries(tmp_path):
+    """Repeated state updates should not be rejected or hide execution stalls."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-1B",
+            "title": "idempotent state",
+            "state": "Doing",
+            "now": "old",
+            "_scheduler": {"retryCount": 2, "escalationLevel": 1},
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_state("T-1B", "Doing", "仍在执行")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["state"] == "Doing"
+        assert task["now"] == "仍在执行"
+        assert task["_scheduler"]["retryCount"] == 2
+        assert task["_scheduler"]["escalationLevel"] == 1
+    finally:
+        kb.TASKS_FILE = original
+
+
 def test_block_and_unblock(tmp_path):
     """kanban block round-trip."""
     tasks_file = tmp_path / "tasks_source.json"
@@ -80,6 +106,32 @@ def test_flow_log(tmp_path):
         assert len(task["flow_log"]) == 1
         assert task["flow_log"][0]["from"] == "中书省"
         assert task["flow_log"][0]["to"] == "门下省"
+    finally:
+        kb.TASKS_FILE = original
+
+
+def test_start_execution_flow_does_not_reset_retry_counter(tmp_path):
+    """Repeated start-only flow records should not keep a task from escalating."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-3B",
+            "title": "flow retry test",
+            "state": "Doing",
+            "org": "刑部",
+            "flow_log": [],
+            "_scheduler": {"retryCount": 1, "escalationLevel": 0},
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_flow("T-3B", "刑部", "刑部", "▶️ 开始执行：代码审查任务")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["_scheduler"]["retryCount"] == 1
+        assert task["_scheduler"]["escalationLevel"] == 0
+        assert task["_scheduler"]["lastProgressAt"]
     finally:
         kb.TASKS_FILE = original
 

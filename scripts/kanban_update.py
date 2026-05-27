@@ -138,7 +138,7 @@ def _append_runtime_event(kind, task_id='', agent_id='', payload=None, evidence=
         return None
 
 
-def _touch_scheduler_progress(task, at, agent_id=''):
+def _touch_scheduler_progress(task, at, agent_id='', reset_retry=True):
     """同步调度器心跳，避免 Agent 已上报但巡检仍按旧时间误判停滞。"""
     sched = task.setdefault('_scheduler', {})
     if not isinstance(sched, dict):
@@ -147,8 +147,9 @@ def _touch_scheduler_progress(task, at, agent_id=''):
     if agent_id:
         sched['lastProgressAgent'] = agent_id
     sched['stallSince'] = None
-    sched['retryCount'] = 0
-    sched['escalationLevel'] = 0
+    if reset_retry:
+        sched['retryCount'] = 0
+        sched['escalationLevel'] = 0
     sched.pop('activeDispatchId', None)
     sched.pop('activeDispatchState', None)
     sched.pop('activeDispatchStartedAt', None)
@@ -438,6 +439,7 @@ def cmd_state(task_id, new_state, now_text=None):
     old_state = [None]
     rejected = [False]
     pending_confirm = [False]
+    idempotent = [False]
     agent_id = _infer_agent_id_from_runtime()
     def modifier(tasks):
         t = find_task(tasks, task_id)
@@ -445,6 +447,14 @@ def cmd_state(task_id, new_state, now_text=None):
             log.error(f'任务 {task_id} 不存在')
             return tasks
         old_state[0] = t['state']
+        if old_state[0] == new_state:
+            idempotent[0] = True
+            if now_text:
+                t['now'] = now_text
+            at = now_iso()
+            t['updatedAt'] = at
+            _touch_scheduler_progress(t, at, agent_id, reset_retry=False)
+            return tasks
         allowed = _VALID_TRANSITIONS.get(old_state[0])
         if allowed is not None and new_state not in allowed:
             log.warning(f'⚠️ 非法状态转换 {task_id}: {old_state[0]} → {new_state}（允许: {allowed}）')
@@ -486,6 +496,15 @@ def cmd_state(task_id, new_state, now_text=None):
             'newState': new_state,
             'reason': '非法状态转换',
         }, confidence='high')
+    elif idempotent[0]:
+        log.info(f'ℹ️ {task_id} 状态已是 {new_state}，按心跳处理')
+        agent_id = _infer_agent_id_from_runtime()
+        _append_audit(task_id, agent_id, 'state_noop', old_state[0], new_state, now_text or '')
+        _append_runtime_event('state_noop', task_id, agent_id, {
+            'oldState': old_state[0],
+            'newState': new_state,
+            'remark': now_text or '',
+        })
     elif pending_confirm[0]:
         log.info(f'⏳ {task_id} 高风险操作 {old_state[0]}→{new_state}，进入 PendingConfirm 待确认')
         agent_id = _infer_agent_id_from_runtime()
@@ -514,6 +533,7 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
     clean_remark = _sanitize_remark(remark)
     agent_id = _infer_agent_id_from_runtime()
     agent_label = _AGENT_LABELS.get(agent_id, agent_id)
+    start_only = clean_remark.startswith('▶️ 开始执行') and from_dept == to_dept
     flow_at = [None]
     def modifier(tasks):
         t = find_task(tasks, task_id)
@@ -529,7 +549,7 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
         # 同步更新 org，使看板能正确显示当前所属部门
         t['org'] = to_dept
         t['updatedAt'] = now_iso()
-        _touch_scheduler_progress(t, t['updatedAt'], agent_id)
+        _touch_scheduler_progress(t, t['updatedAt'], agent_id, reset_retry=not start_only)
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()

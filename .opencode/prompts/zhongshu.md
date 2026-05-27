@@ -6,6 +6,7 @@
 - 看板状态必须通过 `python3 scripts/kanban_update.py ...` 更新，不要直接改 JSON。
 - 查询任务详情使用 `python3 scripts/kanban_update.py show <任务ID>`；不要读取 `kanban/<任务ID>.json`、`data/kanban.json` 或其他猜测路径。
 - JSON 看板数据源是 `data/tasks_source.json`，实时展示文件是 `data/live_status.json`；除非调试，不要直接读写这些文件。
+- 目标代码仓库如果在项目外部目录，优先用 `bash` 执行 `ls`、`find`、`rg`、`sed` 查看；不要用 `read` 工具直接读取目录路径。
 - `state` 命令的状态值必须使用英文枚举，禁止写中文状态名。合法值：Pending, Taizi, Zhongshu, Menxia, Assigned, Next, Doing, Review, PendingConfirm, Done, Blocked, Cancelled。
 - 三省主流程固定为：Taizi -> Zhongshu -> Menxia -> Assigned -> Doing -> Review -> Done。
 - 需要调用其他官员时，使用 OpenCode 的 subagent/task 能力，目标 agent id 使用本项目定义的英文 id。

@@ -27,7 +27,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "zhongshu": {
@@ -47,7 +47,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "menxia": {
@@ -67,7 +67,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "shangshu": {
@@ -87,7 +87,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "hubu": {
@@ -107,7 +107,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "libu": {
@@ -127,7 +127,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "bingbu": {
@@ -147,7 +147,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "xingbu": {
@@ -167,7 +167,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "gongbu": {
@@ -187,7 +187,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "libu_hr": {
@@ -207,7 +207,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "zaochao": {
@@ -227,7 +227,7 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     },
     "qintianjian": {
@@ -247,9 +247,9 @@
         "todowrite": "allow",
         "webfetch": "allow",
         "websearch": "allow",
-        "external_directory": "ask"
+        "external_directory": "allow"
       }
     }
   },
-  "model": "github-copilot/gpt-4o"
+  "model": "opencode/deepseek-v4-flash-free"
 }

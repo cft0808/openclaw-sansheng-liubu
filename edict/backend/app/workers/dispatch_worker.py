@@ -682,7 +682,7 @@ class DispatchWorker:
         model = (
             os.environ.get("OPENCODE_MODEL", "").strip()
             or os.environ.get("OPENCODE_DEFAULT_MODEL", "").strip()
-            or "github-copilot/gpt-4o"
+            or "opencode/deepseek-v4-flash-free"
         )
         if model:
             cmd.extend(["--model", model])
