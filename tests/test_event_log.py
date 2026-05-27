@@ -173,3 +173,33 @@ def test_opencode_storage_activity_parser(monkeypatch, tmp_path):
     assert any(a['kind'] == 'assistant' and 'Windows' in a.get('text', '') for a in activity)
     assert any(a['kind'] == 'assistant' and a.get('tools', [{}])[0].get('name') == 'bash' for a in activity if a.get('tools'))
     assert any(a['kind'] == 'tool_result' and a.get('output') == 'built' for a in activity)
+
+
+def test_opencode_session_error_is_detected(monkeypatch):
+    import server as srv
+
+    stdout = '{"type":"text","sessionID":"ses_bad","part":{"text":"x"}}\n'
+    assert srv._opencode_session_id_from_output(stdout) == 'ses_bad'
+
+    class Resp:
+        def read(self):
+            return json.dumps([
+                {
+                    'info': {
+                        'role': 'assistant',
+                        'providerID': 'github-copilot',
+                        'modelID': 'claude-sonnet-4.6',
+                        'error': {
+                            'name': 'APIError',
+                            'data': {'message': 'The requested model is not supported.'},
+                        },
+                    },
+                    'parts': [],
+                }
+            ]).encode('utf-8')
+
+    monkeypatch.setattr(srv, 'urlopen', lambda *args, **kwargs: Resp())
+
+    error = srv._opencode_session_error('ses_bad')
+    assert 'github-copilot/claude-sonnet-4.6' in error
+    assert 'not supported' in error

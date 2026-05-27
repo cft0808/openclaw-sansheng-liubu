@@ -174,6 +174,67 @@ def test_dispatch_uses_opencode_run_attach(monkeypatch, tmp_path):
     assert updated['_scheduler']['lastDispatchStatus'] == 'success'
 
 
+def test_stale_dispatch_result_does_not_override_newer_progress(monkeypatch, tmp_path):
+    """A late dispatch result must not overwrite progress from a newer task state."""
+    import server as srv
+
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    task_id = 'JJC-20260527-001'
+    task = {
+        'id': task_id,
+        'title': '审查代码',
+        'state': 'Taizi',
+        'org': '太子',
+        'updatedAt': '2026-05-27T12:00:00Z',
+    }
+    tasks_path = data_dir / 'tasks_source.json'
+    tasks_path.write_text(json.dumps([task], ensure_ascii=False), encoding='utf-8')
+
+    monkeypatch.setenv('EDICT_RUNTIME', 'opencode')
+    monkeypatch.setattr(srv, 'DATA', data_dir)
+    monkeypatch.setattr(srv, '_ACTIVE_TASK_DATA_DIR', data_dir)
+    monkeypatch.setattr(srv, '_check_gateway_alive', lambda: True)
+    monkeypatch.setattr(srv, '_resolve_opencode_bin', lambda: '/usr/local/bin/opencode')
+    monkeypatch.setattr(srv, '_opencode_session_error', lambda session_id: '')
+    monkeypatch.setattr(srv, '_trigger_refresh', lambda: None)
+
+    class ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            if self.target:
+                self.target()
+
+    class Completed:
+        returncode = 0
+        stdout = '{"sessionID":"ses_ok"}\n'
+        stderr = ''
+
+    def fake_run(cmd, **kwargs):
+        tasks = json.loads(tasks_path.read_text(encoding='utf-8'))
+        tasks[0]['state'] = 'Zhongshu'
+        tasks[0]['org'] = '中书省'
+        sched = tasks[0]['_scheduler']
+        sched['lastDispatchStatus'] = 'progress'
+        sched['lastProgressAt'] = '2026-05-27T12:00:05Z'
+        sched.pop('activeDispatchId', None)
+        tasks_path.write_text(json.dumps(tasks, ensure_ascii=False), encoding='utf-8')
+        return Completed()
+
+    monkeypatch.setattr(srv.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(srv.subprocess, 'run', fake_run)
+
+    srv.dispatch_for_state(task_id, task, 'Taizi', trigger='test')
+
+    updated = json.loads(tasks_path.read_text(encoding='utf-8'))[0]
+    sched = updated['_scheduler']
+    assert updated['state'] == 'Zhongshu'
+    assert sched['lastDispatchStatus'] == 'progress'
+    assert sched.get('lastDispatchSession') != 'ses_ok'
+
+
 def test_opencode_agents_are_idle_without_recent_session(monkeypatch):
     """OpenCode server availability should not make every agent look busy."""
     import server as srv

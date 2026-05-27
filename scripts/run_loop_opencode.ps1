@@ -18,6 +18,7 @@ $RepoDir = Split-Path -Parent $ScriptDir
 $env:EDICT_HOME = if ($env:EDICT_HOME) { $env:EDICT_HOME } else { $RepoDir }
 $env:EDICT_RUNTIME = "opencode"
 $env:EDICT_AGENT_RUNTIME = "opencode"
+if (-not $env:OPENCODE_MODEL) { $env:OPENCODE_MODEL = "github-copilot/gpt-4o" }
 
 $Log = Join-Path $env:TEMP "sansheng_liubu_opencode_refresh.log"
 $PidFile = Join-Path $env:TEMP "sansheng_liubu_opencode_refresh.pid"

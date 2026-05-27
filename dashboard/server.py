@@ -11,7 +11,7 @@ Endpoints:
   GET  /api/model-change-log   → data/model_change_log.json
   GET  /api/last-result        → data/last_model_change_result.json
 """
-import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, shutil
+import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, shutil, uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
@@ -877,6 +877,15 @@ def _opencode_server_url():
     return os.environ.get('OPENCODE_SERVER_URL', 'http://127.0.0.1:4096').strip().rstrip('/')
 
 
+def _opencode_model():
+    """Return a known-good OpenCode model unless the operator overrides it."""
+    return (
+        os.environ.get('OPENCODE_MODEL', '').strip()
+        or os.environ.get('OPENCODE_DEFAULT_MODEL', '').strip()
+        or 'github-copilot/gpt-4o'
+    )
+
+
 def _resolve_opencode_bin():
     configured = os.environ.get('OPENCODE_BIN', '').strip()
     if configured:
@@ -1178,7 +1187,7 @@ def wake_agent(agent_id, message=''):
                     '--format', 'json',
                     '--title', f'wake-{runtime_id}',
                 ]
-                model = os.environ.get('OPENCODE_MODEL', '').strip()
+                model = _opencode_model()
                 if model:
                     cmd.extend(['--model', model])
                 cmd.append(msg)
@@ -1354,6 +1363,16 @@ def _update_task_scheduler(task_id, updater):
         updater(task, sched)
 
     return modify_task(task_id, _apply)
+
+
+def _scheduler_dispatch_is_current(task, sched, dispatch_id, dispatch_state, agent_id):
+    """Return True only while this background dispatch is still the active one."""
+    return (
+        sched.get('activeDispatchId') == dispatch_id
+        and sched.get('activeDispatchState') == dispatch_state
+        and sched.get('lastDispatchAgent') == agent_id
+        and task.get('state') == dispatch_state
+    )
 
 
 def get_scheduler_state(task_id):
@@ -1860,6 +1879,49 @@ def _opencode_session_candidates(agent_id='', task_id=None, keywords=None, limit
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[:limit_sessions]
+
+
+def _opencode_session_id_from_output(stdout):
+    for line in (stdout or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        sid = item.get('sessionID') or (item.get('part') or {}).get('sessionID')
+        if sid:
+            return sid
+    return ''
+
+
+def _opencode_session_error(session_id):
+    if not session_id:
+        return ''
+    try:
+        req = Request(f'{_opencode_server_url()}/session/{session_id}/message', headers={'Accept': 'application/json'})
+        data = json.loads(urlopen(req, timeout=5).read().decode('utf-8'))
+    except Exception as exc:
+        return f'OpenCode session 结果读取失败: {exc}'
+    if not isinstance(data, list):
+        return ''
+    for item in data:
+        info = item.get('info') if isinstance(item, dict) else {}
+        if not isinstance(info, dict):
+            continue
+        err = info.get('error')
+        if not err:
+            continue
+        if isinstance(err, dict):
+            detail = err.get('data') if isinstance(err.get('data'), dict) else {}
+            msg = detail.get('message') or err.get('message') or err.get('name')
+            model = info.get('modelID') or ''
+            provider = info.get('providerID') or ''
+            prefix = f'{provider}/{model}: ' if provider or model else ''
+            return (prefix + str(msg or err))[:500]
+        return str(err)[:500]
+    return ''
 
 
 def _opencode_input_preview(value):
@@ -2679,12 +2741,19 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
         log.info(f'ℹ️ {task_id} 新状态 {new_state} 无对应 Agent，跳过自动派发')
         return
 
+    dispatch_id = uuid.uuid4().hex
+    dispatch_started_at = now_iso()
+
     _update_task_scheduler(task_id, lambda t, s: (
         s.update({
-            'lastDispatchAt': now_iso(),
+            'lastDispatchAt': dispatch_started_at,
             'lastDispatchStatus': 'queued',
             'lastDispatchAgent': agent_id,
             'lastDispatchTrigger': trigger,
+            'lastDispatchError': '',
+            'activeDispatchId': dispatch_id,
+            'activeDispatchState': new_state,
+            'activeDispatchStartedAt': dispatch_started_at,
         }),
         _scheduler_add_flow(t, f'已入队派发：{new_state} → {agent_id}（{trigger}）', to=_STATE_LABELS.get(new_state, new_state))
     ))
@@ -2694,6 +2763,7 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
         'newState': new_state,
         'trigger': trigger,
         'status': 'queued',
+        'dispatchId': dispatch_id,
         'remark': f'已入队派发: {new_state} -> {agent_id}',
     })
 
@@ -2706,14 +2776,21 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             f'📜 皇上旨意需要你处理\n'
             f'任务ID: {task_id}\n'
             f'旨意: {title}\n'
-            f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。\n'
-            f'请立即转交中书省起草执行方案。'
+            f'⚠️ 看板已有此任务，请勿重复创建。\n'
+            f'如需任务详情，只能执行：python3 scripts/kanban_update.py show {task_id}；不要读取 kanban/{task_id}.json 或 data/kanban.json。\n'
+            f'必须使用英文状态枚举，禁止写“处理中”等中文状态。\n'
+            f'请按顺序执行：\n'
+            f'1) python3 scripts/kanban_update.py progress {task_id} "太子正在整理旨意并转交中书省" "整理旨意🔄|转交中书省|中书省起草"\n'
+            f'2) python3 scripts/kanban_update.py state {task_id} Zhongshu "太子已分拣，转中书省起草"\n'
+            f'3) python3 scripts/kanban_update.py flow {task_id} "太子" "中书省" "📋 旨意传达：请中书省起草执行方案"\n'
+            f'4) 调用 zhongshu subagent 起草方案。'
         ),
         'zhongshu': (
             f'📜 旨意已到中书省，请起草方案\n'
             f'任务ID: {task_id}\n'
             f'旨意: {title}\n'
             f'⚠️ 看板已有此任务记录，请勿重复创建。直接用 kanban_update.py state 更新状态。\n'
+            f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要猜测单任务 JSON 路径。\n'
             f'请立即起草执行方案，走完完整三省流程（中书起草→门下审议→尚书派发→六部执行）。'
         ),
         'menxia': (
@@ -2721,6 +2798,7 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             f'任务ID: {task_id}\n'
             f'旨意: {title}\n'
             f'⚠️ 看板已有此任务，请勿重复创建。\n'
+            f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要猜测单任务 JSON 路径。\n'
             f'请审议中书省方案，给出准奏或封驳意见。'
         ),
         'shangshu': (
@@ -2729,19 +2807,71 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             f'旨意: {title}\n'
             f'{"建议派发部门: " + target_dept if target_dept else ""}\n'
             f'⚠️ 看板已有此任务，请勿重复创建。\n'
-            f'请分析方案并派发给六部执行。'
+            f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要读取 kanban/{task_id}.json 或 data/kanban.json。\n'
+            f'请先更新看板：python3 scripts/kanban_update.py progress {task_id} "尚书省正在分析方案并准备派发六部" "确认方案🔄|选择部门|派发六部|汇总回奏"\n'
+            f'然后执行：python3 scripts/kanban_update.py state {task_id} Doing "尚书省派发任务给六部"\n'
+            f'再执行：python3 scripts/kanban_update.py flow {task_id} "尚书省" "六部" "📮 尚书省派发六部执行"\n'
+            f'最后调用需要的六部 subagent 执行并汇总。'
         ),
     }
     msg = _msgs.get(agent_id, (
         f'📌 请处理任务\n'
         f'任务ID: {task_id}\n'
         f'旨意: {title}\n'
-        f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。'
+        f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。\n'
+        f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要猜测单任务 JSON 路径。'
     ))
     runtime = _agent_runtime()
     runtime_label = _runtime_label()
 
     def _do_dispatch():
+        def _update_if_current(status, error='', session_id='', flow_remark=''):
+            stale = {'value': False, 'state': '', 'activeDispatchId': ''}
+
+            def _apply(t, s):
+                if not _scheduler_dispatch_is_current(t, s, dispatch_id, new_state, agent_id):
+                    stale['value'] = True
+                    stale['state'] = t.get('state', '')
+                    stale['activeDispatchId'] = s.get('activeDispatchId', '')
+                    return
+                update = {
+                    'lastDispatchAt': now_iso(),
+                    'lastDispatchStatus': status,
+                    'lastDispatchAgent': agent_id,
+                    'lastDispatchTrigger': trigger,
+                    'lastDispatchError': error,
+                }
+                if session_id:
+                    update['lastDispatchSession'] = session_id
+                s.update(update)
+                s.pop('activeDispatchId', None)
+                s.pop('activeDispatchState', None)
+                s.pop('activeDispatchStartedAt', None)
+                if flow_remark:
+                    _scheduler_add_flow(t, flow_remark, to=t.get('org', ''))
+
+            updated = _update_task_scheduler(task_id, _apply)
+            if stale['value']:
+                log.info(
+                    f'ℹ️ {task_id} 忽略过期派发结果 → {agent_id} '
+                    f'(dispatch={dispatch_id[:8]}, state={stale["state"]}, status={status})'
+                )
+                _append_runtime_event('dispatch_stale_result_ignored', task_id, agent_id, {
+                    'from': runtime_label,
+                    'to': agent_id,
+                    'trigger': trigger,
+                    'status': status,
+                    'dispatchId': dispatch_id,
+                    'activeDispatchId': stale['activeDispatchId'],
+                    'expectedState': new_state,
+                    'currentState': stale['state'],
+                    'error': error,
+                    'sessionId': session_id,
+                    'remark': '过期派发结果已忽略',
+                }, confidence='high')
+                return False
+            return bool(updated)
+
         try:
             # Gateway 可能暂时不可达（休眠恢复、进程重启），等待后重试
             import time as _time
@@ -2754,17 +2884,13 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     _time.sleep(5 * (_gw_attempt + 1))  # 5s, 10s
             if not _gw_alive:
                 log.warning(f'⚠️ {task_id} 自动派发跳过: {runtime_label} 未启动（重试3次仍不可达）')
-                _update_task_scheduler(task_id, lambda t, s: s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'gateway-offline',
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                }))
+                _update_if_current('gateway-offline')
                 _append_runtime_event('dispatch_gateway_offline', task_id, agent_id, {
                     'from': runtime_label,
                     'to': agent_id,
                     'trigger': trigger,
                     'status': 'gateway-offline',
+                    'dispatchId': dispatch_id,
                     'remark': f'{runtime_label} 未启动，派发跳过',
                 }, confidence='low')
                 return
@@ -2775,21 +2901,13 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     status = 'opencode-missing'
                     flow_msg = f'派发异常：OpenCode CLI 未找到（{trigger}）'
                     log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
-                    _update_task_scheduler(task_id, lambda t, s: (
-                        s.update({
-                            'lastDispatchAt': now_iso(),
-                            'lastDispatchStatus': status,
-                            'lastDispatchAgent': agent_id,
-                            'lastDispatchTrigger': trigger,
-                            'lastDispatchError': err,
-                        }),
-                        _scheduler_add_flow(t, flow_msg, to=t.get('org', ''))
-                    ))
+                    _update_if_current(status, error=err, flow_remark=flow_msg)
                     _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
                         'from': runtime_label,
                         'to': agent_id,
                         'trigger': trigger,
                         'status': status,
+                        'dispatchId': dispatch_id,
                         'remark': flow_msg,
                         'error': err,
                     }, confidence='low')
@@ -2802,7 +2920,7 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     '--format', 'json',
                     '--title', f'{task_id} {title}'[:120],
                 ]
-                model = os.environ.get('OPENCODE_MODEL', '').strip()
+                model = _opencode_model()
                 if model:
                     cmd.extend(['--model', model])
                 cmd.append(msg)
@@ -2815,21 +2933,17 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 if not openclaw_bin:
                     err = 'OpenClaw CLI 未找到：请确认已安装 openclaw 并加入 PATH；Windows 可设置 OPENCLAW_BIN 指向 openclaw.cmd'
                     log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
-                    _update_task_scheduler(task_id, lambda t, s: (
-                        s.update({
-                            'lastDispatchAt': now_iso(),
-                            'lastDispatchStatus': 'openclaw-missing',
-                            'lastDispatchAgent': agent_id,
-                            'lastDispatchTrigger': trigger,
-                            'lastDispatchError': err,
-                        }),
-                        _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
-                    ))
+                    _update_if_current(
+                        'openclaw-missing',
+                        error=err,
+                        flow_remark=f'派发异常：OpenClaw CLI 未找到（{trigger}）',
+                    )
                     _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
                         'from': runtime_label,
                         'to': agent_id,
                         'trigger': trigger,
                         'status': 'openclaw-missing',
+                        'dispatchId': dispatch_id,
                         'remark': f'派发异常：OpenClaw CLI 未找到（{trigger}）',
                         'error': err,
                     }, confidence='low')
@@ -2847,27 +2961,46 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'trigger': trigger,
                     'status': 'started',
                     'attempt': attempt,
+                    'dispatchId': dispatch_id,
                     'remark': f'开始派发: {agent_id} (第{attempt}次)',
                 })
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=310)
                 if result.returncode == 0:
+                    session_id = _opencode_session_id_from_output(result.stdout) if runtime == 'opencode' else ''
+                    session_error = _opencode_session_error(session_id) if runtime == 'opencode' else ''
+                    if session_error:
+                        err = session_error[:300]
+                        log.warning(f'⚠️ {task_id} OpenCode session 报错(第{attempt}次): {err}')
+                        _append_runtime_event('dispatch_failed', task_id, agent_id, {
+                            'from': runtime_label,
+                            'to': agent_id,
+                            'trigger': trigger,
+                            'status': 'agent-error',
+                            'attempt': attempt,
+                            'sessionId': session_id,
+                            'dispatchId': dispatch_id,
+                            'remark': f'OpenCode session 报错: {agent_id}（{trigger}）',
+                            'error': err,
+                        }, confidence='low')
+                        if attempt < max_retries:
+                            import time
+                            time.sleep(5)
+                            continue
+                        break
                     log.info(f'✅ {task_id} 自动派发成功 → {agent_id}')
-                    _update_task_scheduler(task_id, lambda t, s: (
-                        s.update({
-                            'lastDispatchAt': now_iso(),
-                            'lastDispatchStatus': 'success',
-                            'lastDispatchAgent': agent_id,
-                            'lastDispatchTrigger': trigger,
-                            'lastDispatchError': '',
-                        }),
-                        _scheduler_add_flow(t, f'派发成功：{agent_id}（{trigger}）', to=t.get('org', ''))
-                    ))
+                    _update_if_current(
+                        'success',
+                        session_id=session_id,
+                        flow_remark=f'派发成功：{agent_id}（{trigger}）',
+                    )
                     _append_runtime_event('dispatch_succeeded', task_id, agent_id, {
                         'from': runtime_label,
                         'to': agent_id,
                         'trigger': trigger,
                         'status': 'success',
                         'attempt': attempt,
+                        'sessionId': session_id,
+                        'dispatchId': dispatch_id,
                         'remark': f'派发成功: {agent_id}（{trigger}）',
                     })
                     return
@@ -2877,41 +3010,33 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     import time
                     time.sleep(5)
             log.error(f'❌ {task_id} 自动派发最终失败 → {agent_id}')
-            _update_task_scheduler(task_id, lambda t, s: (
-                s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'failed',
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                    'lastDispatchError': err,
-                }),
-                _scheduler_add_flow(t, f'派发失败：{agent_id}（{trigger}）', to=t.get('org', ''))
-            ))
+            _update_if_current(
+                'failed',
+                error=err,
+                flow_remark=f'派发失败：{agent_id}（{trigger}）',
+            )
             _append_runtime_event('dispatch_failed', task_id, agent_id, {
                 'from': runtime_label,
                 'to': agent_id,
                 'trigger': trigger,
                 'status': 'failed',
+                'dispatchId': dispatch_id,
                 'remark': f'派发失败: {agent_id}（{trigger}）',
                 'error': err,
             }, confidence='low')
         except subprocess.TimeoutExpired:
             log.error(f'❌ {task_id} 自动派发超时 → {agent_id}')
-            _update_task_scheduler(task_id, lambda t, s: (
-                s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'timeout',
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                    'lastDispatchError': 'timeout',
-                }),
-                _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
-            ))
+            _update_if_current(
+                'timeout',
+                error='timeout',
+                flow_remark=f'派发超时：{agent_id}（{trigger}）',
+            )
             _append_runtime_event('dispatch_failed', task_id, agent_id, {
                 'from': runtime_label,
                 'to': agent_id,
                 'trigger': trigger,
                 'status': 'timeout',
+                'dispatchId': dispatch_id,
                 'remark': f'派发超时: {agent_id}（{trigger}）',
                 'error': 'timeout',
             }, confidence='low')
@@ -2920,41 +3045,33 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             missing_status = 'opencode-missing' if runtime == 'opencode' else 'openclaw-missing'
             err = f'{missing_runtime} CLI 未找到：{e}'
             log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
-            _update_task_scheduler(task_id, lambda t, s: (
-                s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': missing_status,
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                    'lastDispatchError': err[:200],
-                }),
-                _scheduler_add_flow(t, f'派发异常：{missing_runtime} CLI 未找到（{trigger}）', to=t.get('org', ''))
-            ))
+            _update_if_current(
+                missing_status,
+                error=err[:200],
+                flow_remark=f'派发异常：{missing_runtime} CLI 未找到（{trigger}）',
+            )
             _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
                 'from': runtime_label,
                 'to': agent_id,
                 'trigger': trigger,
                 'status': missing_status,
+                'dispatchId': dispatch_id,
                 'remark': f'派发异常：{missing_runtime} CLI 未找到（{trigger}）',
                 'error': err[:200],
             }, confidence='low')
         except Exception as e:
             log.warning(f'⚠️ {task_id} 自动派发异常: {e}')
-            _update_task_scheduler(task_id, lambda t, s: (
-                s.update({
-                    'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'error',
-                    'lastDispatchAgent': agent_id,
-                    'lastDispatchTrigger': trigger,
-                    'lastDispatchError': str(e)[:200],
-                }),
-                _scheduler_add_flow(t, f'派发异常：{agent_id}（{trigger}）', to=t.get('org', ''))
-            ))
+            _update_if_current(
+                'error',
+                error=str(e)[:200],
+                flow_remark=f'派发异常：{agent_id}（{trigger}）',
+            )
             _append_runtime_event('dispatch_failed', task_id, agent_id, {
                 'from': runtime_label,
                 'to': agent_id,
                 'trigger': trigger,
                 'status': 'error',
+                'dispatchId': dispatch_id,
                 'remark': f'派发异常: {agent_id}（{trigger}）',
                 'error': str(e)[:200],
             }, confidence='low')
