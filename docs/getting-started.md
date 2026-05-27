@@ -4,19 +4,25 @@
 
 ---
 
-## 第一步：安装 OpenClaw
+## 第一步：选择并安装 Agent 运行时
 
-三省六部基于 [OpenClaw](https://openclaw.ai) 运行，请先安装：
+三省六部现在支持 OpenCode 和 [OpenClaw](https://openclaw.ai) 两种运行时。新项目本地体验推荐 OpenCode；已有 OpenClaw 工作区可继续沿用。
 
 ```bash
-# macOS
+# OpenCode（推荐）
+curl -fsSL https://opencode.ai/install | bash
+
+# OpenCode（Node.js 方式）
+npm install -g opencode-ai
+
+# OpenClaw（macOS）
 brew install openclaw
 
 # 或下载安装包
 # https://openclaw.ai/download
 ```
 
-安装完成后初始化：
+使用 OpenClaw 时需要先初始化：
 
 ```bash
 openclaw init
@@ -34,15 +40,16 @@ chmod +x install.sh && ./install.sh
 - ✅ 创建 12 个 Agent Workspace（`~/.openclaw/workspace-*`）
 - ✅ 写入各省部 SOUL.md 人格文件
 - ✅ 注册 Agent 及权限矩阵到 `openclaw.json`
+- ✅ OpenCode 模式下可生成项目本地 `opencode.json` 与 `.opencode/prompts/*`
 - ✅ 配置旨意数据清洗规则
 - ✅ 构建 React 前端到 `dashboard/dist/`（需 Node.js 18+）
 - ✅ 初始化数据目录
 - ✅ 执行首次数据同步
-- ✅ 重启 Gateway 使配置生效
+- ✅ OpenClaw 模式下重启 Gateway 使配置生效
 
 ## 第三步：配置消息渠道
 
-在 OpenClaw 中配置消息渠道（Feishu / Telegram / Signal），将 `taizi`（太子）Agent 设为旨意入口。太子会自动分拣闲聊与指令，指令类消息提炼标题后转发中书省。
+如果使用 OpenClaw，可配置消息渠道（Feishu / Telegram / Signal），将 `taizi`（太子）Agent 设为旨意入口。太子会自动分拣闲聊与指令，指令类消息提炼标题后转发中书省。
 
 ```bash
 # 查看当前渠道
@@ -57,6 +64,25 @@ openclaw channels add --type feishu --agent taizi
 ## 第四步：启动服务
 
 ```bash
+# OpenCode 模式：一键启动 OpenCode server、看板和数据循环
+bash edict.sh opencode
+
+# OpenClaw 模式：终端 1，数据刷新循环（每 15 秒同步）
+bash scripts/run_loop.sh
+
+# OpenClaw 模式：终端 2，看板服务器
+python3 dashboard/server.py
+
+# 打开浏览器
+open http://127.0.0.1:7891
+```
+
+> 💡 **提示**：OpenCode 模式会自动同步 `agents/*/SOUL.md` 到 `.opencode/prompts/`，并将看板运行时切到 OpenCode。
+
+<details>
+<summary>OpenClaw 手动启动命令</summary>
+
+```bash
 # 终端 1：数据刷新循环（每 15 秒同步）
 bash scripts/run_loop.sh
 
@@ -67,7 +93,9 @@ python3 dashboard/server.py
 open http://127.0.0.1:7891
 ```
 
-> 💡 **提示**：`run_loop.sh` 每 15 秒自动同步数据。可用 `&` 后台运行。
+`run_loop.sh` 每 15 秒自动同步数据。可用 `&` 后台运行。
+
+</details>
 
 > 💡 **看板即开即用**：`server.py` 内嵌 `dashboard/dashboard.html`，无需额外构建。Docker 镜像包含预构建的 React 前端。
 

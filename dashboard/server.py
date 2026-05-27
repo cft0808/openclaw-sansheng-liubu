@@ -13,7 +13,7 @@ Endpoints:
 """
 import json, pathlib, subprocess, sys, threading, argparse, datetime, logging, re, os, socket, shutil
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
 
 # JWT 认证模块
@@ -828,11 +828,118 @@ _AGENT_DEPTS = [
 ]
 
 
+def _agent_runtime():
+    """Return the active agent runtime: openclaw (default) or opencode."""
+    raw = (os.environ.get('EDICT_AGENT_RUNTIME') or os.environ.get('EDICT_RUNTIME') or 'openclaw').strip().lower()
+    normalized = raw.replace('-', '').replace('_', '').replace(' ', '')
+    if normalized in ('opencode', 'opencold'):
+        return 'opencode'
+    return 'openclaw'
+
+
+def _runtime_label():
+    return 'OpenCode' if _agent_runtime() == 'opencode' else 'OpenClaw Gateway'
+
+
+def _opencode_server_url():
+    return os.environ.get('OPENCODE_SERVER_URL', 'http://127.0.0.1:4096').strip().rstrip('/')
+
+
+def _resolve_opencode_bin():
+    configured = os.environ.get('OPENCODE_BIN', '').strip()
+    if configured:
+        return configured
+    return shutil.which('opencode')
+
+
+def _check_opencode_probe():
+    """Probe the OpenCode headless server."""
+    base_url = _opencode_server_url()
+    basic_alive = False
+    for path in ('/doc', '/'):
+        try:
+            req = Request(f'{base_url}{path}', headers={'Accept': 'application/json'})
+            resp = urlopen(req, timeout=3)
+            if 200 <= resp.status < 500:
+                basic_alive = True
+                break
+        except Exception:
+            continue
+    if not basic_alive:
+        return False
+    if (BASE.parent / 'opencode.json').exists():
+        return {'taizi', 'zhongshu', 'shangshu'}.issubset(_opencode_agent_names())
+    return True
+
+
+def _opencode_agent_names():
+    try:
+        query = urlencode({'directory': str(BASE.parent)})
+        req = Request(f'{_opencode_server_url()}/agent?{query}', headers={'Accept': 'application/json'})
+        data = json.loads(urlopen(req, timeout=3).read().decode('utf-8'))
+        if isinstance(data, list):
+            return {str(item.get('name', '')) for item in data if item.get('name')}
+    except Exception:
+        pass
+    return set()
+
+
+def _opencode_config_has_agent(agent_id):
+    cfg_path = BASE.parent / 'opencode.json'
+    prompt_path = BASE.parent / '.opencode' / 'prompts' / f'{agent_id}.md'
+    if not cfg_path.exists() or not prompt_path.exists():
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+        return agent_id in (cfg.get('agent') or {})
+    except Exception:
+        return False
+
+
+def _get_opencode_agent_session_status(agent_id):
+    """Best-effort OpenCode session activity status."""
+    try:
+        query = urlencode({'directory': str(BASE.parent)})
+        req = Request(f'{_opencode_server_url()}/session?{query}', headers={'Accept': 'application/json'})
+        data = json.loads(urlopen(req, timeout=3).read().decode('utf-8'))
+    except Exception:
+        return 0, 0, False
+
+    if not isinstance(data, list):
+        return 0, 0, False
+
+    session_count = 0
+    last_ts = 0
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if item.get('agent') and item.get('agent') != agent_id:
+            continue
+        session_count += 1
+        ts = item.get('updatedAt') or item.get('time') or item.get('createdAt') or 0
+        if isinstance(ts, str):
+            try:
+                dt = datetime.datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                ts = int(dt.timestamp() * 1000)
+            except Exception:
+                ts = 0
+        elif isinstance(ts, (int, float)) and ts < 10_000_000_000:
+            ts = int(ts * 1000)
+        if isinstance(ts, (int, float)) and ts > last_ts:
+            last_ts = int(ts)
+
+    now_ms = int(datetime.datetime.now().timestamp() * 1000)
+    is_busy = bool(last_ts and now_ms - last_ts <= 2 * 60 * 1000)
+    return last_ts, session_count, is_busy
+
+
 def _check_gateway_alive():
     """检测 Gateway 是否在运行。
 
     Windows 上不要依赖 pgrep；优先通过本地端口探测判断。
     """
+    if _agent_runtime() == 'opencode':
+        return _check_opencode_probe()
     if _check_gateway_probe():
         return True
     try:
@@ -849,6 +956,8 @@ def _check_gateway_alive():
 
 def _check_gateway_probe():
     """通过 HTTP probe 检测 Gateway 是否响应。"""
+    if _agent_runtime() == 'opencode':
+        return _check_opencode_probe()
     for url in ('http://127.0.0.1:18789/', 'http://127.0.0.1:18789/healthz'):
         try:
             from urllib.request import urlopen
@@ -864,6 +973,8 @@ def _get_agent_session_status(agent_id):
     """读取 Agent 的 sessions.json 获取活跃状态。
     返回: (last_active_ts_ms, session_count, is_busy)
     """
+    if _agent_runtime() == 'opencode':
+        return _get_opencode_agent_session_status(agent_id)
     sessions_file = OCLAW_HOME / 'agents' / agent_id / 'sessions' / 'sessions.json'
     if not sessions_file.exists():
         return 0, 0, False
@@ -886,7 +997,13 @@ def _get_agent_session_status(agent_id):
 
 
 def _check_agent_process(agent_id):
-    """检测是否有该 Agent 的 openclaw-agent 进程正在运行。"""
+    """检测是否有该 Agent 的独立运行进程。
+
+    OpenCode 的 headless server 是共享服务，不会为每个 agent 常驻一个
+    可被 pgrep 识别的进程；是否“正在工作”由最近 session 活动判断。
+    """
+    if _agent_runtime() == 'opencode':
+        return False
     try:
         result = subprocess.run(
             ['pgrep', '-f', f'openclaw.*--agent.*{agent_id}'],
@@ -899,6 +1016,8 @@ def _check_agent_process(agent_id):
 
 def _check_agent_workspace(agent_id):
     """检查 Agent 工作空间是否存在。"""
+    if _agent_runtime() == 'opencode':
+        return _opencode_config_has_agent(agent_id)
     ws = OCLAW_HOME / f'workspace-{agent_id}'
     return ws.is_dir()
 
@@ -912,6 +1031,9 @@ def get_agents_status():
     - hasWorkspace: 工作空间是否存在
     - processAlive: 是否有进程在运行
     """
+    runtime = _agent_runtime()
+    runtime_label = _runtime_label()
+    opencode_names = _opencode_agent_names() if runtime == 'opencode' else set()
     gateway_alive = _check_gateway_alive()
     gateway_probe = _check_gateway_probe() if gateway_alive else False
 
@@ -923,7 +1045,7 @@ def get_agents_status():
             continue
         seen_ids.add(aid)
 
-        has_workspace = _check_agent_workspace(aid)
+        has_workspace = _check_agent_workspace(aid) or (aid in opencode_names)
         last_ts, sess_count, is_busy = _get_agent_session_status(aid)
         process_alive = _check_agent_process(aid)
 
@@ -933,7 +1055,7 @@ def get_agents_status():
             status_label = '❌ 未配置'
         elif not gateway_alive:
             status = 'offline'
-            status_label = '🔴 Gateway 离线'
+            status_label = f'🔴 {runtime_label} 离线'
         elif process_alive or is_busy:
             status = 'running'
             status_label = '🟢 运行中'
@@ -951,7 +1073,7 @@ def get_agents_status():
                 status_label = '⚪ 休眠'
         else:
             status = 'idle'
-            status_label = '⚪ 无记录'
+            status_label = '🟡 待命' if runtime == 'opencode' else '⚪ 无记录'
 
         # 格式化最后活跃时间
         last_active_str = None
@@ -982,7 +1104,9 @@ def get_agents_status():
         'gateway': {
             'alive': gateway_alive,
             'probe': gateway_probe,
-            'status': '🟢 运行中' if gateway_probe else ('🟡 进程在但无响应' if gateway_alive else '🔴 未启动'),
+            'runtime': runtime,
+            'label': runtime_label,
+            'status': '🟢 运行中' if gateway_probe else (f'🟡 {runtime_label} 进程在但无响应' if gateway_alive else f'🔴 {runtime_label} 未启动'),
         },
         'agents': agents,
         'checkedAt': now_iso(),
@@ -996,15 +1120,38 @@ def wake_agent(agent_id, message=''):
     if not _check_agent_workspace(agent_id):
         return {'ok': False, 'error': f'{agent_id} 工作空间不存在，请先配置'}
     if not _check_gateway_alive():
-        return {'ok': False, 'error': 'Gateway 未启动，请先运行 openclaw gateway start'}
+        return {'ok': False, 'error': f'{_runtime_label()} 未启动，请先启动运行时服务'}
 
     # agent_id 直接作为 runtime_id（openclaw agents list 中的注册名）
     runtime_id = agent_id
     msg = message or f'🔔 系统心跳检测 — 请回复 OK 确认在线。当前时间: {now_iso()}'
+    runtime = _agent_runtime()
+    if runtime == 'opencode':
+        runtime_bin = _resolve_opencode_bin()
+        if not runtime_bin:
+            return {'ok': False, 'error': 'OpenCode CLI 未找到：请安装 opencode 或设置 OPENCODE_BIN'}
+    else:
+        runtime_bin = _resolve_openclaw_bin()
+        if not runtime_bin:
+            return {'ok': False, 'error': 'OpenClaw CLI 未找到：请安装 openclaw 或设置 OPENCLAW_BIN'}
 
     def do_wake():
         try:
-            cmd = ['openclaw', 'agent', '--agent', runtime_id, '-m', msg, '--timeout', '120']
+            if runtime == 'opencode':
+                cmd = [
+                    runtime_bin, 'run',
+                    '--attach', _opencode_server_url(),
+                    '--dir', str(BASE.parent),
+                    '--agent', runtime_id,
+                    '--format', 'json',
+                    '--title', f'wake-{runtime_id}',
+                ]
+                model = os.environ.get('OPENCODE_MODEL', '').strip()
+                if model:
+                    cmd.extend(['--model', model])
+                cmd.append(msg)
+            else:
+                cmd = [runtime_bin, 'agent', '--agent', runtime_id, '-m', msg, '--timeout', '120']
             log.info(f'🔔 唤醒 {agent_id}...')
             # 带重试（最多2次）
             for attempt in range(1, 3):
@@ -2191,6 +2338,8 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
         f'旨意: {title}\n'
         f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。'
     ))
+    runtime = _agent_runtime()
+    runtime_label = _runtime_label()
 
     def _do_dispatch():
         try:
@@ -2204,7 +2353,7 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 if _gw_attempt < 2:
                     _time.sleep(5 * (_gw_attempt + 1))  # 5s, 10s
             if not _gw_alive:
-                log.warning(f'⚠️ {task_id} 自动派发跳过: Gateway 未启动（重试3次仍不可达）')
+                log.warning(f'⚠️ {task_id} 自动派发跳过: {runtime_label} 未启动（重试3次仍不可达）')
                 _update_task_scheduler(task_id, lambda t, s: s.update({
                     'lastDispatchAt': now_iso(),
                     'lastDispatchStatus': 'gateway-offline',
@@ -2212,28 +2361,59 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchTrigger': trigger,
                 }))
                 return
-            # Fix #139/#182: dispatch channel 可配置；未配置时不传 --deliver 避免
-            # "unknown channel: feishu" 错误（非飞书用户）
-            _agent_cfg = read_json(DATA / 'agent_config.json', {})
-            _channel = (_agent_cfg.get('dispatchChannel') or '').strip()
-            openclaw_bin = _resolve_openclaw_bin()
-            if not openclaw_bin:
-                err = 'OpenClaw CLI 未找到：请确认已安装 openclaw 并加入 PATH；Windows 可设置 OPENCLAW_BIN 指向 openclaw.cmd'
-                log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
-                _update_task_scheduler(task_id, lambda t, s: (
-                    s.update({
-                        'lastDispatchAt': now_iso(),
-                        'lastDispatchStatus': 'openclaw-missing',
-                        'lastDispatchAgent': agent_id,
-                        'lastDispatchTrigger': trigger,
-                        'lastDispatchError': err,
-                    }),
-                    _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
-                ))
-                return
-            cmd = [openclaw_bin, 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
-            if _channel:
-                cmd.extend(['--deliver', '--channel', _channel])
+            if runtime == 'opencode':
+                opencode_bin = _resolve_opencode_bin()
+                if not opencode_bin:
+                    err = 'OpenCode CLI 未找到：请确认已安装 opencode 并加入 PATH；可设置 OPENCODE_BIN 指向 opencode 可执行文件'
+                    status = 'opencode-missing'
+                    flow_msg = f'派发异常：OpenCode CLI 未找到（{trigger}）'
+                    log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
+                    _update_task_scheduler(task_id, lambda t, s: (
+                        s.update({
+                            'lastDispatchAt': now_iso(),
+                            'lastDispatchStatus': status,
+                            'lastDispatchAgent': agent_id,
+                            'lastDispatchTrigger': trigger,
+                            'lastDispatchError': err,
+                        }),
+                        _scheduler_add_flow(t, flow_msg, to=t.get('org', ''))
+                    ))
+                    return
+                cmd = [
+                    opencode_bin, 'run',
+                    '--attach', _opencode_server_url(),
+                    '--dir', str(BASE.parent),
+                    '--agent', agent_id,
+                    '--format', 'json',
+                    '--title', f'{task_id} {title}'[:120],
+                ]
+                model = os.environ.get('OPENCODE_MODEL', '').strip()
+                if model:
+                    cmd.extend(['--model', model])
+                cmd.append(msg)
+            else:
+                # Fix #139/#182: dispatch channel 可配置；未配置时不传 --deliver 避免
+                # "unknown channel: feishu" 错误（非飞书用户）
+                _agent_cfg = read_json(DATA / 'agent_config.json', {})
+                _channel = (_agent_cfg.get('dispatchChannel') or '').strip()
+                openclaw_bin = _resolve_openclaw_bin()
+                if not openclaw_bin:
+                    err = 'OpenClaw CLI 未找到：请确认已安装 openclaw 并加入 PATH；Windows 可设置 OPENCLAW_BIN 指向 openclaw.cmd'
+                    log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
+                    _update_task_scheduler(task_id, lambda t, s: (
+                        s.update({
+                            'lastDispatchAt': now_iso(),
+                            'lastDispatchStatus': 'openclaw-missing',
+                            'lastDispatchAgent': agent_id,
+                            'lastDispatchTrigger': trigger,
+                            'lastDispatchError': err,
+                        }),
+                        _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
+                    ))
+                    return
+                cmd = [openclaw_bin, 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
+                if _channel:
+                    cmd.extend(['--deliver', '--channel', _channel])
             max_retries = 2
             err = ''
             for attempt in range(1, max_retries + 1):
@@ -2281,17 +2461,19 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
             ))
         except FileNotFoundError as e:
-            err = f'OpenClaw CLI 未找到：{e}'
+            missing_runtime = 'OpenCode' if runtime == 'opencode' else 'OpenClaw'
+            missing_status = 'opencode-missing' if runtime == 'opencode' else 'openclaw-missing'
+            err = f'{missing_runtime} CLI 未找到：{e}'
             log.warning(f'⚠️ {task_id} 自动派发异常: {err}')
             _update_task_scheduler(task_id, lambda t, s: (
                 s.update({
                     'lastDispatchAt': now_iso(),
-                    'lastDispatchStatus': 'openclaw-missing',
+                    'lastDispatchStatus': missing_status,
                     'lastDispatchAgent': agent_id,
                     'lastDispatchTrigger': trigger,
                     'lastDispatchError': err[:200],
                 }),
-                _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
+                _scheduler_add_flow(t, f'派发异常：{missing_runtime} CLI 未找到（{trigger}）', to=t.get('org', ''))
             ))
         except Exception as e:
             log.warning(f'⚠️ {task_id} 自动派发异常: {e}')

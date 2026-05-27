@@ -27,10 +27,17 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     debug: bool = False
 
+    # ── Agent Runtime ──
+    agent_runtime: str = "openclaw"  # openclaw | opencode
+
     # ── OpenClaw ──
     openclaw_gateway_url: str = "http://localhost:18789"
     openclaw_bin: str = "openclaw"
     openclaw_project_dir: str | None = None
+
+    # ── OpenCode ──
+    opencode_bin: str = "opencode"
+    opencode_server_url: str = "http://127.0.0.1:4096"
 
     # ── Legacy 兼容 ──
     legacy_data_dir: str = "../data"
