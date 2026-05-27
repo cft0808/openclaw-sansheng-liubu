@@ -679,7 +679,11 @@ class DispatchWorker:
             "--format", "json",
             "--title", title or task_id,
         ]
-        model = os.environ.get("OPENCODE_MODEL", "").strip()
+        model = (
+            os.environ.get("OPENCODE_MODEL", "").strip()
+            or os.environ.get("OPENCODE_DEFAULT_MODEL", "").strip()
+            or "github-copilot/gpt-4o"
+        )
         if model:
             cmd.extend(["--model", model])
         cmd.append(message)

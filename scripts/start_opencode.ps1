@@ -15,6 +15,7 @@ $DashboardPort = if ($env:EDICT_DASHBOARD_PORT) { [int]$env:EDICT_DASHBOARD_PORT
 $OpenCodeHost = if ($env:OPENCODE_HOST) { $env:OPENCODE_HOST } else { "127.0.0.1" }
 $OpenCodePort = if ($env:OPENCODE_PORT) { [int]$env:OPENCODE_PORT } else { 4096 }
 $OpenCodeServerUrl = if ($env:OPENCODE_SERVER_URL) { $env:OPENCODE_SERVER_URL.TrimEnd("/") } else { "http://${OpenCodeHost}:${OpenCodePort}" }
+$OpenCodeModel = if ($env:OPENCODE_MODEL) { $env:OPENCODE_MODEL } else { "github-copilot/gpt-4o" }
 
 $PidDir = Join-Path $RepoDir ".pids"
 $LogDir = Join-Path $RepoDir "logs"
@@ -202,11 +203,13 @@ $env:EDICT_AGENT_RUNTIME = "opencode"
 $env:EDICT_PYTHON = $Python.File
 $env:OPENCODE_BIN = $OpenCodeBin
 $env:OPENCODE_SERVER_URL = $OpenCodeServerUrl
+$env:OPENCODE_MODEL = $OpenCodeModel
 
 Ensure-DataFiles
 
 Write-Host "Python:   $($Python.File)" -ForegroundColor Green
 Write-Host "OpenCode: $OpenCodeBin" -ForegroundColor Green
+Write-Host "Model:    $OpenCodeModel" -ForegroundColor Green
 
 Info "同步 OpenCode agent 配置..."
 Invoke-Python @((Join-Path $RepoDir "scripts\sync_opencode_agents.py"))

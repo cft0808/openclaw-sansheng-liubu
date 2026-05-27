@@ -13,6 +13,7 @@ DASHBOARD_PORT="${EDICT_DASHBOARD_PORT:-7891}"
 OPENCODE_HOST="${OPENCODE_HOST:-127.0.0.1}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
 OPENCODE_SERVER_URL="${OPENCODE_SERVER_URL:-http://${OPENCODE_HOST}:${OPENCODE_PORT}}"
+OPENCODE_MODEL="${OPENCODE_MODEL:-github-copilot/gpt-4o}"
 PIDDIR="$REPO_DIR/.pids"
 LOGDIR="$REPO_DIR/logs"
 SERVER_PIDFILE="$PIDDIR/server.pid"
@@ -139,10 +140,10 @@ start_opencode_server() {
 
 start_dashboard_server() {
   if command -v screen &>/dev/null; then
-    screen -dmS edict-server bash -lc "cd \"$REPO_DIR\" && echo \$\$ > \"$SERVER_PIDFILE\" && exec env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode OPENCODE_BIN=\"$OPENCODE_BIN_RESOLVED\" OPENCODE_SERVER_URL=\"$OPENCODE_SERVER_URL\" \"$PYTHON_BIN\" \"$REPO_DIR/dashboard/server.py\" --host \"$DASHBOARD_HOST\" --port \"$DASHBOARD_PORT\" >> \"$SERVER_LOG\" 2>&1"
+    screen -dmS edict-server bash -lc "cd \"$REPO_DIR\" && echo \$\$ > \"$SERVER_PIDFILE\" && exec env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode OPENCODE_BIN=\"$OPENCODE_BIN_RESOLVED\" OPENCODE_SERVER_URL=\"$OPENCODE_SERVER_URL\" OPENCODE_MODEL=\"$OPENCODE_MODEL\" \"$PYTHON_BIN\" \"$REPO_DIR/dashboard/server.py\" --host \"$DASHBOARD_HOST\" --port \"$DASHBOARD_PORT\" >> \"$SERVER_LOG\" 2>&1"
   else
     nohup env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode \
-      OPENCODE_BIN="$OPENCODE_BIN_RESOLVED" OPENCODE_SERVER_URL="$OPENCODE_SERVER_URL" \
+      OPENCODE_BIN="$OPENCODE_BIN_RESOLVED" OPENCODE_SERVER_URL="$OPENCODE_SERVER_URL" OPENCODE_MODEL="$OPENCODE_MODEL" \
       "$PYTHON_BIN" "$REPO_DIR/dashboard/server.py" --host "$DASHBOARD_HOST" --port "$DASHBOARD_PORT" \
       >> "$SERVER_LOG" 2>&1 &
     echo $! > "$SERVER_PIDFILE"
@@ -151,10 +152,10 @@ start_dashboard_server() {
 
 start_refresh_loop() {
   if command -v screen &>/dev/null; then
-    screen -dmS edict-loop bash -lc "cd \"$REPO_DIR\" && echo \$\$ > \"$LOOP_PIDFILE\" && exec env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode EDICT_PYTHON=\"$PYTHON_BIN\" OPENCODE_BIN=\"$OPENCODE_BIN_RESOLVED\" OPENCODE_SERVER_URL=\"$OPENCODE_SERVER_URL\" bash \"$REPO_DIR/scripts/run_loop_opencode.sh\" >> \"$LOOP_LOG\" 2>&1"
+    screen -dmS edict-loop bash -lc "cd \"$REPO_DIR\" && echo \$\$ > \"$LOOP_PIDFILE\" && exec env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode EDICT_PYTHON=\"$PYTHON_BIN\" OPENCODE_BIN=\"$OPENCODE_BIN_RESOLVED\" OPENCODE_SERVER_URL=\"$OPENCODE_SERVER_URL\" OPENCODE_MODEL=\"$OPENCODE_MODEL\" bash \"$REPO_DIR/scripts/run_loop_opencode.sh\" >> \"$LOOP_LOG\" 2>&1"
   else
     nohup env EDICT_RUNTIME=opencode EDICT_AGENT_RUNTIME=opencode EDICT_PYTHON="$PYTHON_BIN" \
-      OPENCODE_BIN="$OPENCODE_BIN_RESOLVED" OPENCODE_SERVER_URL="$OPENCODE_SERVER_URL" \
+      OPENCODE_BIN="$OPENCODE_BIN_RESOLVED" OPENCODE_SERVER_URL="$OPENCODE_SERVER_URL" OPENCODE_MODEL="$OPENCODE_MODEL" \
       bash "$REPO_DIR/scripts/run_loop_opencode.sh" \
       >> "$LOOP_LOG" 2>&1 &
     echo $! > "$LOOP_PIDFILE"
@@ -204,6 +205,7 @@ export EDICT_RUNTIME=opencode
 export EDICT_AGENT_RUNTIME=opencode
 export OPENCODE_BIN="$OPENCODE_BIN_RESOLVED"
 export OPENCODE_SERVER_URL
+export OPENCODE_MODEL
 
 mkdir -p "$PIDDIR" "$LOGDIR" "$REPO_DIR/data"
 for f in live_status.json agent_config.json model_change_log.json sync_status.json; do
@@ -222,6 +224,7 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 echo -e "Python:  ${GREEN}${PYTHON_BIN}${NC}"
 echo -e "OpenCode: ${GREEN}${OPENCODE_BIN_RESOLVED}${NC}"
+echo -e "Model:    ${GREEN}${OPENCODE_MODEL}${NC}"
 
 echo -e "${GREEN}▶ 同步 OpenCode agent 配置...${NC}"
 "$PYTHON_BIN" "$REPO_DIR/scripts/sync_opencode_agents.py"

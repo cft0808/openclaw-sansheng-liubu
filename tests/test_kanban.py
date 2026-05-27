@@ -168,6 +168,58 @@ def test_progress(tmp_path):
         kb.TASKS_FILE = original
 
 
+def test_progress_clears_active_dispatch(tmp_path):
+    """Any real progress should stop stale queued dispatch recovery."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-5B",
+            "title": "progress scheduler test",
+            "state": "Taizi",
+            "org": "太子",
+            "_scheduler": {
+                "lastDispatchStatus": "queued",
+                "activeDispatchId": "old",
+                "activeDispatchState": "Taizi",
+                "activeDispatchStartedAt": "2026-05-27T12:00:00Z",
+                "retryCount": 2,
+                "escalationLevel": 1,
+            },
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_progress("T-5B", "太子已经接旨并开始转交", "转交中书省🔄")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        sched = task["_scheduler"]
+        assert sched["lastDispatchStatus"] == "progress"
+        assert sched["retryCount"] == 0
+        assert sched["escalationLevel"] == 0
+        assert "activeDispatchId" not in sched
+    finally:
+        kb.TASKS_FILE = original
+
+
+def test_show_outputs_task_json(tmp_path, capsys):
+    """cmd_show gives agents a safe way to inspect a task."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {"id": "T-SHOW", "title": "show test", "state": "Doing"}
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_show("T-SHOW")
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] is True
+        assert out["task"]["id"] == "T-SHOW"
+    finally:
+        kb.TASKS_FILE = original
+
+
 def test_todo(tmp_path):
     """cmd_todo adds and updates sub-tasks."""
     tasks_file = tmp_path / "tasks_source.json"

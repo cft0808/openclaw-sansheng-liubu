@@ -10,6 +10,9 @@
 两种模式互相独立，数据不会自动同步。
 
 用法:
+  # 查询任务
+  python3 kanban_update.py show JJC-20260223-012
+
   # 新建任务（收旨时）
   python3 kanban_update.py create JJC-20260223-012 "任务标题" Zhongshu 中书省 中书令
 
@@ -134,6 +137,28 @@ def _append_runtime_event(kind, task_id='', agent_id='', payload=None, evidence=
         log.debug(f'事件账本写入失败 ({kind}/{task_id}): {exc}')
         return None
 
+
+def _touch_scheduler_progress(task, at, agent_id=''):
+    """同步调度器心跳，避免 Agent 已上报但巡检仍按旧时间误判停滞。"""
+    sched = task.setdefault('_scheduler', {})
+    if not isinstance(sched, dict):
+        return
+    sched['lastProgressAt'] = at
+    if agent_id:
+        sched['lastProgressAgent'] = agent_id
+    sched['stallSince'] = None
+    sched['retryCount'] = 0
+    sched['escalationLevel'] = 0
+    sched.pop('activeDispatchId', None)
+    sched.pop('activeDispatchState', None)
+    sched.pop('activeDispatchStartedAt', None)
+    if sched.get('lastDispatchStatus') in {
+        'queued', 'timeout', 'failed', 'error', 'gateway-offline',
+        'openclaw-missing', 'opencode-missing',
+    }:
+        sched['lastDispatchStatus'] = 'progress'
+        sched['lastDispatchError'] = ''
+
 _REFRESH_SIGNAL_FILE = _BASE / 'data' / '.refresh_pending'
 
 def _trigger_refresh():
@@ -186,17 +211,17 @@ def _append_audit(task_id, agent, action, old_val=None, new_val=None, reason="")
 
 # ── 越权检测（Agent 权限策略）──
 AGENT_POLICY = {
-    "taizi":    {"role": "coordination", "commands": {"create", "state", "flow", "progress", "todo", "memory", "task-memo"}},
-    "zhongshu": {"role": "coordination", "commands": {"state", "flow", "progress", "todo", "memory", "task-memo", "delegate"}},
-    "menxia":   {"role": "coordination", "commands": {"state", "flow", "progress", "todo", "confirm", "memory", "task-memo"}},
-    "shangshu": {"role": "coordination", "commands": {"state", "flow", "progress", "todo", "confirm", "delegate", "memory", "task-memo", "shared-memo"}},
-    "zaochao":  {"role": "coordination", "commands": {"progress", "todo", "memory"}},
-    "hubu":     {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
-    "libu":     {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
-    "bingbu":   {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
-    "xingbu":   {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
-    "gongbu":   {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
-    "libu_hr":  {"role": "execution", "commands": {"progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "taizi":    {"role": "coordination", "commands": {"show", "create", "state", "flow", "progress", "todo", "memory", "task-memo"}},
+    "zhongshu": {"role": "coordination", "commands": {"show", "state", "flow", "progress", "todo", "memory", "task-memo", "delegate"}},
+    "menxia":   {"role": "coordination", "commands": {"show", "state", "flow", "progress", "todo", "confirm", "memory", "task-memo"}},
+    "shangshu": {"role": "coordination", "commands": {"show", "state", "flow", "progress", "todo", "confirm", "delegate", "memory", "task-memo", "shared-memo"}},
+    "zaochao":  {"role": "coordination", "commands": {"show", "progress", "todo", "memory"}},
+    "hubu":     {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "libu":     {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "bingbu":   {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "xingbu":   {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "gongbu":   {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
+    "libu_hr":  {"role": "execution", "commands": {"show", "progress", "todo", "done", "block", "memory", "task-memo", "delegate-result"}},
 }
 
 def _check_permission(agent_id, cmd):
@@ -215,6 +240,16 @@ def _check_permission(agent_id, cmd):
 
 def find_task(tasks, task_id):
     return next((t for t in tasks if t.get('id') == task_id), None)
+
+
+def cmd_show(task_id):
+    """打印单个任务的当前看板记录，供 Agent 查询上下文。"""
+    tasks = atomic_json_read(TASKS_FILE, [])
+    task = find_task(tasks, task_id)
+    if not task:
+        print(json.dumps({'ok': False, 'error': f'任务 {task_id} 不存在'}, ensure_ascii=False))
+        sys.exit(1)
+    print(json.dumps({'ok': True, 'task': task}, ensure_ascii=False, indent=2))
 
 
 # 旨意标题最低要求
@@ -403,6 +438,7 @@ def cmd_state(task_id, new_state, now_text=None):
     old_state = [None]
     rejected = [False]
     pending_confirm = [False]
+    agent_id = _infer_agent_id_from_runtime()
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
@@ -425,7 +461,9 @@ def cmd_state(task_id, new_state, now_text=None):
                 'confirm_by': CONFIRM_AUTHORITY.get(old_state[0], 'shangshu'),
             }
             t['now'] = f'待确认: {old_state[0]}→{new_state}'
-            t['updatedAt'] = now_iso()
+            at = now_iso()
+            t['updatedAt'] = at
+            _touch_scheduler_progress(t, at, agent_id)
             pending_confirm[0] = True
             return tasks
         t['state'] = new_state
@@ -433,7 +471,9 @@ def cmd_state(task_id, new_state, now_text=None):
             t['org'] = STATE_ORG_MAP[new_state]
         if now_text:
             t['now'] = now_text
-        t['updatedAt'] = now_iso()
+        at = now_iso()
+        t['updatedAt'] = at
+        _touch_scheduler_progress(t, at, agent_id)
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
@@ -489,6 +529,7 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
         # 同步更新 org，使看板能正确显示当前所属部门
         t['org'] = to_dept
         t['updatedAt'] = now_iso()
+        _touch_scheduler_progress(t, t['updatedAt'], agent_id)
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
@@ -552,6 +593,7 @@ def cmd_done(task_id, output_path='', summary=''):
             else:
                 t['outputMeta'] = {"exists": False, "lastModified": None}
         t['updatedAt'] = now_iso()
+        _touch_scheduler_progress(t, t['updatedAt'], _infer_agent_id_from_runtime(t))
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
@@ -579,9 +621,11 @@ def cmd_block(task_id, reason):
             log.error(f'任务 {task_id} 不存在')
             return tasks
         old_state[0] = t.get('state', '')
+        at = now_iso()
         t['state'] = 'Blocked'
         t['block'] = reason
-        t['updatedAt'] = now_iso()
+        t['updatedAt'] = at
+        _touch_scheduler_progress(t, at, _infer_agent_id_from_runtime(t))
         return tasks
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
@@ -630,7 +674,9 @@ def cmd_confirm(task_id, action, reason=''):
             rejected[0] = True
             return tasks
         t.pop('pending_confirm', None)
-        t['updatedAt'] = now_iso()
+        at = now_iso()
+        t['updatedAt'] = at
+        _touch_scheduler_progress(t, at, _infer_agent_id_from_runtime(t))
         t.setdefault('flow_log', []).append({
             'at': now_iso(), 'from': 'PendingConfirm', 'to': result_state[0],
             'remark': f'{"✅ 批准" if action == "approve" else "❌ 驳回"}: {reason}',
@@ -731,6 +777,7 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
             log_entry['elapsed'] = elapsed
         t.setdefault('progress_log', []).append(log_entry)
         event_payload[0] = dict(log_entry)
+        _touch_scheduler_progress(t, at, agent_id)
         # 限制 progress_log 大小，防止无限增长
         if len(t['progress_log']) > MAX_PROGRESS_LOG:
             t['progress_log'] = t['progress_log'][-MAX_PROGRESS_LOG:]
@@ -811,7 +858,9 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
             'completed': result_info[0],
             'total': result_info[1],
         }
-        t['updatedAt'] = now_iso()
+        at = now_iso()
+        t['updatedAt'] = at
+        _touch_scheduler_progress(t, at, _infer_agent_id_from_runtime(t))
         result_info[0] = sum(1 for td in t['todos'] if td.get('status') == 'completed')
         result_info[1] = len(t['todos'])
         todo_event[0]['completed'] = result_info[0]
@@ -1100,6 +1149,7 @@ def cmd_delegate_result(sub_task_id, result_json):
     })
 
 _CMD_MIN_ARGS = {
+    'show': 2,
     'create': 6, 'state': 3, 'flow': 5, 'done': 2, 'block': 3, 'confirm': 3,
     'todo': 4, 'progress': 3,
     'memory': 4, 'task-memo': 4, 'shared-memo': 3,
@@ -1118,7 +1168,9 @@ if __name__ == '__main__':
         sys.exit(1)
     # 越权检测：推断当前 Agent 身份，校验是否有权执行该命令
     _check_permission(_infer_agent_id_from_runtime(), cmd)
-    if cmd == 'create':
+    if cmd == 'show':
+        cmd_show(args[1])
+    elif cmd == 'create':
         cmd_create(args[1], args[2], args[3], args[4], args[5], args[6] if len(args)>6 else None)
     elif cmd == 'state':
         cmd_state(args[1], args[2], args[3] if len(args)>3 else None)

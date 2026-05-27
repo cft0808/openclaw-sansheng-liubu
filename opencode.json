@@ -250,5 +250,6 @@
         "external_directory": "ask"
       }
     }
-  }
+  },
+  "model": "github-copilot/gpt-4o"
 }
