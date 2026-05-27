@@ -469,6 +469,12 @@ function LiveActivitySection({
 
   // Resource summary
   const rs = data.resourceSummary;
+  const evidence = data.stateEvidence;
+  const evidenceColor = evidence?.confidence === 'high' || evidence?.confidence === 'complete'
+    ? '#22c55e'
+    : evidence?.confidence === 'medium'
+      ? '#f59e0b'
+      : '#ef4444';
 
   // Group non-flow activity by agent
   const flowItems = activity.filter((a) => a.kind === 'flow');
@@ -489,6 +495,27 @@ function LiveActivitySection({
         </span>
         <span className="la-agent">{agentParts.join(' · ') || '加载中...'}</span>
       </div>
+
+      {evidence && (
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 8,
+          padding: '5px 0 8px',
+          borderBottom: '1px solid var(--line)',
+          fontSize: 11,
+        }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: evidenceColor, boxShadow: `0 0 0 3px ${evidenceColor}22` }} />
+            运行证据
+          </span>
+          <span style={{ color: evidenceColor, fontWeight: 700 }}>{evidence.label}</span>
+          <span style={{ color: 'var(--muted)' }}>{evidence.eventCount || 0}条事件</span>
+          {evidence.latestEventKind && <span style={{ color: 'var(--muted)' }}>{evidence.latestEventKind}</span>}
+          {evidence.lastObservedAt && <span style={{ color: 'var(--muted)' }}>{formatDashboardDateTime(evidence.lastObservedAt)}</span>}
+        </div>
+      )}
 
       {/* Phase Bars */}
       {phaseDurations.length > 0 && (
@@ -695,5 +722,11 @@ function ActivityEntryView({ entry: a }: { entry: ActivityEntry }) {
     );
   }
 
-  return null;
+  return (
+    <div className="la-entry la-tool">
+      <span className="la-icon">•</span>
+      <span className="la-body">{agBadge}<span className="la-tool-name">{a.eventKind || a.kind}</span>{a.text || a.remark || ''}</span>
+      <span className="la-time">{time}</span>
+    </div>
+  );
 }
