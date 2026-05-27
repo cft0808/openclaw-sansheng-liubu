@@ -882,7 +882,7 @@ def _opencode_model():
     return (
         os.environ.get('OPENCODE_MODEL', '').strip()
         or os.environ.get('OPENCODE_DEFAULT_MODEL', '').strip()
-        or 'github-copilot/gpt-4o'
+        or 'opencode/deepseek-v4-flash-free'
     )
 
 
@@ -2819,7 +2819,10 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
         f'任务ID: {task_id}\n'
         f'旨意: {title}\n'
         f'⚠️ 看板已有此任务，请勿重复创建。直接用 kanban_update.py 更新状态。\n'
-        f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要猜测单任务 JSON 路径。'
+        f'如需任务详情，先执行：python3 scripts/kanban_update.py show {task_id}；不要猜测单任务 JSON 路径。\n'
+        f'目标仓库若是外部目录，请用 bash 的 ls/find/rg/sed 查看；不要用 read 工具直接读取目录路径。\n'
+        f'如果任务当前已经是 Doing，不要再执行 state {task_id} Doing；请直接 progress/flow/todo。\n'
+        f'本次派发必须有明确收口：完成就先把相关 todo 标为 completed，再执行 done；不能完成就执行 block 并写明阻塞原因。'
     ))
     runtime = _agent_runtime()
     runtime_label = _runtime_label()
