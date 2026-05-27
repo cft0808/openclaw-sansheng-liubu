@@ -51,6 +51,14 @@ cd C:\Users\<YOUR_USER>\.openclaw\workspace\skills\edict
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
+如果你使用 OpenCode 模式，可以不依赖 Git Bash，直接启动：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode
+```
+
+这个命令会自动生成 `opencode.json`、同步 `.opencode\prompts\*`，并启动 OpenCode server、看板服务器和后台刷新循环。
+
 ---
 
 ## 4. 安装后检查两件事
@@ -72,7 +80,19 @@ openclaw config set tools.sessions.visibility all
 ---
 
 ## 5. 启动后台刷新循环
-在 Git Bash / MINGW64 里运行：
+如果使用 OpenCode 模式，推荐直接运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode
+```
+
+如果使用 OpenClaw 模式，在 PowerShell 里运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_loop.ps1
+```
+
+也可以在 Git Bash / MINGW64 里运行旧版脚本：
 
 ```bash
 cd ~/.openclaw/workspace/skills/edict/scripts
@@ -84,7 +104,7 @@ bash run_loop.sh
 ---
 
 ## 6. 启动 dashboard
-在 PowerShell 里运行：
+OpenCode 模式下 `edict.ps1 opencode` 会自动启动 dashboard。OpenClaw 手动模式下，在 PowerShell 里运行：
 
 ```powershell
 cd C:\Users\<YOUR_USER>\.openclaw\workspace\skills\edict
@@ -106,7 +126,7 @@ http://127.0.0.1:7891
 - 面板可以打开
 - `官员总览` 能显示三省六部官员信息
 - `模型配置` 能显示 agent 列表
-- 右上角 Gateway 状态正常
+- `省部调度` 里显示 OpenCode 或 OpenClaw Gateway 状态正常
 - 倒计时会持续刷新页面数据
 
 ---
@@ -199,7 +219,7 @@ openclaw config set tools.sessions.visibility all
 
 ---
 
-## 5. 为什么还要跑 `run_loop.sh`
+## 5. 为什么还要跑刷新循环
 
 dashboard 右上角虽然有一个 5 秒倒计时，但它只是：
 
@@ -209,8 +229,8 @@ dashboard 右上角虽然有一个 5 秒倒计时，但它只是：
 
 真正负责后台数据刷新的是：
 
-```bash
-bash run_loop.sh
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_loop.ps1
 ```
 
 它会持续执行同步脚本，更新：
@@ -222,9 +242,9 @@ bash run_loop.sh
 所以：
 
 - dashboard 倒计时 = **读数据**
-- `run_loop.sh` = **产数据 / 刷数据**
+- `scripts\run_loop.ps1` = **产数据 / 刷数据**
 
-Windows 下也建议正常运行 `run_loop.sh`。
+Windows 下不建议再强依赖 `bash run_loop.sh`；优先使用 `scripts\run_loop.ps1` 或 `edict.ps1 opencode`。
 
 ---
 
@@ -290,8 +310,8 @@ agents.json
 ## 第四步
 启动后台刷新循环：
 
-```bash
-bash run_loop.sh
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_loop.ps1
 ```
 
 ## 第五步
@@ -301,10 +321,17 @@ bash run_loop.sh
 python dashboard\server.py
 ```
 
+如果使用 OpenCode，则第四步和第五步可以合并为：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode
+```
+
 ---
 
 # 五、一句话总结
 
 ## Windows 用户最稳的做法就是：
-先清旧链接，再运行安装脚本；安装后检查 agent 配置和 `tools.sessions.visibility = all`；如有需要可参考 `agents.json` 脱敏模板并替换 `<YOUR_USER>`；最后启动 `run_loop.sh` 和 `dashboard/server.py`。
+OpenCode 模式：直接运行 `powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode`。
 
+OpenClaw 模式：先清旧链接，再运行安装脚本；安装后检查 agent 配置和 `tools.sessions.visibility = all`；如有需要可参考 `agents.json` 脱敏模板并替换 `<YOUR_USER>`；最后启动 `scripts\run_loop.ps1` 和 `dashboard\server.py`。

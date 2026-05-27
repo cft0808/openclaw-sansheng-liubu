@@ -314,6 +314,9 @@ chmod +x install.sh && ./install.sh
 # OpenCode 模式：一键生成 opencode.json 并启动 OpenCode + 看板
 bash edict.sh opencode
 
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode
+
 # OpenClaw 模式：一键启动（推荐）
 chmod +x start.sh && ./start.sh
 
@@ -472,6 +475,7 @@ edict/
 │   └── groups/                 # Agent 分组（sansheng / liubu）
 ├── scripts/
 │   ├── run_loop.sh             # 数据刷新循环（每 15 秒）
+│   ├── run_loop_opencode.ps1   # OpenCode 数据刷新循环（Windows PowerShell）
 │   ├── kanban_update.py        # 看板 CLI（含旨意数据清洗 + 标题校验 + 状态机）
 │   ├── skill_manager.py        # Skill 管理工具（远程/本地 Skills 添加、更新、移除）
 │   ├── agentrec_advisor.py     # Agent 模型推荐（功过簿 + 成本优化）
@@ -497,6 +501,7 @@ edict/
 ├── start.sh                    # 一键启动（Dashboard + 数据刷新）
 ├── edict.service               # systemd 服务配置（生产部署）
 ├── edict.sh                    # 服务管理脚本（start/stop/restart/status）
+├── edict.ps1                   # Windows 服务管理脚本（opencode/stop/status/logs）
 ├── CONTRIBUTING.md             # 贡献指南
 └── LICENSE                     # MIT License
 ```

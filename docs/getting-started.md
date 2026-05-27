@@ -9,10 +9,10 @@
 三省六部现在支持 OpenCode 和 [OpenClaw](https://openclaw.ai) 两种运行时。新项目本地体验推荐 OpenCode；已有 OpenClaw 工作区可继续沿用。
 
 ```bash
-# OpenCode（推荐）
+# OpenCode（macOS / Linux）
 curl -fsSL https://opencode.ai/install | bash
 
-# OpenCode（Node.js 方式）
+# OpenCode（Windows PowerShell 推荐先装 Node.js 18+，再用 npm）
 npm install -g opencode-ai
 
 # OpenClaw（macOS）
@@ -66,6 +66,9 @@ openclaw channels add --type feishu --agent taizi
 ```bash
 # OpenCode 模式：一键启动 OpenCode server、看板和数据循环
 bash edict.sh opencode
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\edict.ps1 opencode
 
 # OpenClaw 模式：终端 1，数据刷新循环（每 15 秒同步）
 bash scripts/run_loop.sh
