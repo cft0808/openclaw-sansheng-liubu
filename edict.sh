@@ -1,7 +1,7 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════
 # 三省六部 · 统一服务管理脚本
-# 用法: ./edict.sh {start|stop|status|restart|logs}
+# 用法: ./edict.sh {start|opencode|stop|status|restart|logs}
 # ══════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -27,13 +27,13 @@ _ensure_dirs() {
   mkdir -p "$PIDDIR" "$LOGDIR" "$REPO_DIR/data"
   # 初始化必需的数据文件
   for f in live_status.json agent_config.json model_change_log.json sync_status.json; do
-    [ ! -f "$REPO_DIR/data/$f" ] && echo '{}' > "$REPO_DIR/data/$f"
+    [[ -f "$REPO_DIR/data/$f" ]] || echo '{}' > "$REPO_DIR/data/$f"
   done
-  [ ! -f "$REPO_DIR/data/pending_model_changes.json" ] && echo '[]' > "$REPO_DIR/data/pending_model_changes.json"
-  [ ! -f "$REPO_DIR/data/tasks_source.json" ] && echo '[]' > "$REPO_DIR/data/tasks_source.json"
-  [ ! -f "$REPO_DIR/data/tasks.json" ] && echo '[]' > "$REPO_DIR/data/tasks.json"
-  [ ! -f "$REPO_DIR/data/officials.json" ] && echo '[]' > "$REPO_DIR/data/officials.json"
-  [ ! -f "$REPO_DIR/data/officials_stats.json" ] && echo '{}' > "$REPO_DIR/data/officials_stats.json"
+  [[ -f "$REPO_DIR/data/pending_model_changes.json" ]] || echo '[]' > "$REPO_DIR/data/pending_model_changes.json"
+  [[ -f "$REPO_DIR/data/tasks_source.json" ]] || echo '[]' > "$REPO_DIR/data/tasks_source.json"
+  [[ -f "$REPO_DIR/data/tasks.json" ]] || echo '[]' > "$REPO_DIR/data/tasks.json"
+  [[ -f "$REPO_DIR/data/officials.json" ]] || echo '[]' > "$REPO_DIR/data/officials.json"
+  [[ -f "$REPO_DIR/data/officials_stats.json" ]] || echo '{}' > "$REPO_DIR/data/officials_stats.json"
 }
 
 _is_running() {
@@ -213,15 +213,17 @@ do_logs() {
 
 case "${1:-}" in
   start)   do_start ;;
+  opencode) bash "$REPO_DIR/scripts/start_opencode.sh" ;;
   stop)    do_stop ;;
   restart) do_stop; sleep 1; do_start ;;
   status)  do_status ;;
   logs)    do_logs "${2:-all}" ;;
   *)
-    echo "用法: $0 {start|stop|restart|status|logs}"
+    echo "用法: $0 {start|opencode|stop|restart|status|logs}"
     echo ""
     echo "命令:"
     echo "  start    启动所有服务（看板 + 数据刷新）"
+    echo "  opencode 切换并启动 OpenCode 模式"
     echo "  stop     停止所有服务"
     echo "  restart  重启所有服务"
     echo "  status   查看运行状态"

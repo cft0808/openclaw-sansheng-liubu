@@ -1,0 +1,254 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "server": {
+    "hostname": "127.0.0.1",
+    "port": 4096,
+    "cors": [
+      "http://127.0.0.1:7891",
+      "http://localhost:7891"
+    ]
+  },
+  "default_agent": "taizi",
+  "agent": {
+    "taizi": {
+      "description": "太子：飞书消息分拣与回奏",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/taizi.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "zhongshu": {
+      "description": "中书省：起草任务令与优先级",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/zhongshu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "menxia": {
+      "description": "门下省：审议与退回机制",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/menxia.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "shangshu": {
+      "description": "尚书省：派单与升级裁决",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/shangshu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "hubu": {
+      "description": "户部：数据/资源/成本",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/hubu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "libu": {
+      "description": "礼部：文档/UI/对外沟通",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/libu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "bingbu": {
+      "description": "兵部：工程实现与架构设计",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/bingbu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "xingbu": {
+      "description": "刑部：质量保障与合规审计",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/xingbu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "gongbu": {
+      "description": "工部：基础设施与部署运维",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/gongbu.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "libu_hr": {
+      "description": "吏部：人事/培训/Agent管理",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/libu_hr.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "zaochao": {
+      "description": "钦天监：每日新闻采集与简报",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/zaochao.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    },
+    "qintianjian": {
+      "description": "钦天监：数据分析与趋势预测",
+      "mode": "all",
+      "prompt": "{file:./.opencode/prompts/qintianjian.md}",
+      "temperature": 0.1,
+      "steps": 60,
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "todowrite": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "external_directory": "ask"
+      }
+    }
+  }
+}

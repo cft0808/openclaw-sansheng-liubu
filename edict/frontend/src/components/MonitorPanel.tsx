@@ -55,6 +55,7 @@ export default function MonitorPanel() {
   const unconf = filtered.filter((a) => a.status === 'unconfigured').length;
   const gw = asData?.gateway;
   const gwCls = gw?.probe ? 'ok' : gw?.alive ? 'warn' : 'err';
+  const runtimeLabel = gw?.label || 'Gateway';
 
   return (
     <div>
@@ -63,7 +64,7 @@ export default function MonitorPanel() {
         <div className="as-panel">
           <div className="as-header">
             <span className="as-title">🔌 Agent 在线状态</span>
-            <span className={`as-gw ${gwCls}`}>Gateway: {gw?.status || '未知'}</span>
+            <span className={`as-gw ${gwCls}`}>{runtimeLabel}: {gw?.status || '未知'}</span>
             <button className="btn-refresh" onClick={() => loadAgentsStatus()} style={{ marginLeft: 8 }}>
               🔄 刷新
             </button>

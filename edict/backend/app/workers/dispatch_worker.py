@@ -1,4 +1,4 @@
-"""Dispatch Worker — 消费 task.dispatch 事件，执行 OpenClaw agent 调用。
+"""Dispatch Worker — 消费 task.dispatch 事件，执行 Agent runtime 调用。
 
 核心解决旧架构痛点：
 - 旧: daemon 线程 + subprocess.run → kill -9 丢失一切
@@ -7,7 +7,7 @@
 流程:
 1. 从 task.dispatch stream 消费事件
 2. 组装富上下文 (_build_agent_context)
-3. 调用 OpenClaw CLI: `openclaw agent --agent xxx -m "..."`
+3. 调用当前运行时 CLI：OpenClaw 或 OpenCode
 4. 解析 agent 输出（kanban_update.py 调用结果）
 5. ACK 事件
 """
@@ -39,6 +39,21 @@ log = logging.getLogger("edict.dispatcher")
 
 GROUP = "dispatcher"
 CONSUMER = "disp-1"
+
+
+def _agent_runtime(settings=None) -> str:
+    """Return normalized runtime name: openclaw (default) or opencode."""
+    settings = settings or get_settings()
+    raw = (
+        os.environ.get("EDICT_AGENT_RUNTIME")
+        or os.environ.get("EDICT_RUNTIME")
+        or settings.agent_runtime
+        or "openclaw"
+    )
+    normalized = str(raw).strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+    if normalized in ("opencode", "opencold"):
+        return "opencode"
+    return "openclaw"
 
 
 class DispatchError(Exception):
@@ -426,7 +441,7 @@ class DispatchWorker:
 
             try:
                 start_time = time.monotonic()
-                result = await self._call_openclaw(agent, enriched_message, task_id, trace_id, payload)
+                result = await self._call_agent_runtime(agent, enriched_message, task_id, trace_id, payload)
                 elapsed = time.monotonic() - start_time
 
                 # 记录执行时间（仅用于监控和告警）
@@ -481,7 +496,7 @@ class DispatchWorker:
                 if "TIMEOUT" in stderr:
                     raise DispatchError("Agent timeout", retryable=True)
                 elif "command not found" in stderr:
-                    raise DispatchError("openclaw binary missing", retryable=False)
+                    raise DispatchError(stderr or "agent runtime binary missing", retryable=False)
                 elif result["returncode"] in (1, 2):
                     raise DispatchError(
                         f"Agent failed: rc={result['returncode']}", retryable=True
@@ -538,6 +553,20 @@ class DispatchWorker:
                 # 不 ACK → Redis 会重新投递给其他消费者
             finally:
                 self._inflight.discard(task_id)
+
+    async def _call_agent_runtime(
+        self,
+        agent: str,
+        message: str,
+        task_id: str,
+        trace_id: str,
+        payload: dict | None = None,
+    ) -> dict:
+        """Dispatch to the configured agent runtime."""
+        settings = get_settings()
+        if _agent_runtime(settings) == "opencode":
+            return await self._call_opencode(agent, message, task_id, trace_id, payload)
+        return await self._call_openclaw(agent, message, task_id, trace_id, payload)
 
     async def _call_openclaw(
         self,
@@ -605,7 +634,7 @@ class DispatchWorker:
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=300,
+                    timeout=settings.dispatch_timeout_sec,
                     env=env,
                     cwd=settings.openclaw_project_dir or None,
                 )
@@ -615,11 +644,108 @@ class DispatchWorker:
                     "stderr": proc.stderr[-2000:] if proc.stderr else "",
                 }
             except subprocess.TimeoutExpired:
-                return {"returncode": -1, "stdout": "", "stderr": "TIMEOUT after 300s"}
+                return {"returncode": -1, "stdout": "", "stderr": f"TIMEOUT after {settings.dispatch_timeout_sec}s"}
             except FileNotFoundError:
                 return {"returncode": -1, "stdout": "", "stderr": "openclaw command not found"}
             finally:
                 # 清理临时上下文文件
+                if context_file:
+                    try:
+                        os.unlink(context_file)
+                    except OSError:
+                        pass
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _run)
+
+    async def _call_opencode(
+        self,
+        agent: str,
+        message: str,
+        task_id: str,
+        trace_id: str,
+        payload: dict | None = None,
+    ) -> dict:
+        """异步调用 OpenCode CLI，连接项目本地 headless server。"""
+        settings = get_settings()
+        project_root = pathlib.Path(settings.openclaw_project_dir) if settings.openclaw_project_dir else _resolve_project_root()
+        title = f"{task_id} {payload.get('title', '') if payload else ''}".strip()[:120]
+        cmd = [
+            settings.opencode_bin,
+            "run",
+            "--attach", settings.opencode_server_url.rstrip("/"),
+            "--dir", str(project_root),
+            "--agent", agent,
+            "--format", "json",
+            "--title", title or task_id,
+        ]
+        model = os.environ.get("OPENCODE_MODEL", "").strip()
+        if model:
+            cmd.extend(["--model", model])
+        cmd.append(message)
+
+        env = os.environ.copy()
+        env["EDICT_TASK_ID"] = task_id
+        env["EDICT_TRACE_ID"] = trace_id
+        env["EDICT_API_URL"] = f"http://localhost:{settings.port}"
+
+        if payload:
+            env["EDICT_TASK_TITLE"] = payload.get("title", "")
+            env["EDICT_TASK_STATE"] = payload.get("state", "")
+            env["EDICT_TASK_ORG"] = payload.get("org", "")
+            env["EDICT_TASK_PRIORITY"] = payload.get("priority", "中")
+            tags = payload.get("tags", [])
+            if tags:
+                env["EDICT_TASK_TAGS"] = ",".join(str(t) for t in tags)
+
+        context_file = None
+        if payload:
+            context_data = {
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "title": payload.get("title", ""),
+                "description": payload.get("description", ""),
+                "state": payload.get("state", ""),
+                "org": payload.get("org", ""),
+                "priority": payload.get("priority", "中"),
+                "tags": payload.get("tags", []),
+                "todos": payload.get("todos", []),
+                "flow_log": payload.get("flow_log", [])[-10:],
+                "progress_log": payload.get("progress_log", [])[-5:],
+                "block": payload.get("block", ""),
+                "meta": payload.get("meta", {}),
+            }
+            try:
+                fd, context_file = tempfile.mkstemp(suffix=".json", prefix=f"edict_ctx_{task_id}_")
+                with os.fdopen(fd, "w") as f:
+                    json.dump(context_data, f, ensure_ascii=False, indent=2)
+                env["EDICT_CONTEXT_FILE"] = context_file
+            except Exception as e:
+                log.warning(f"Failed to write context file for {task_id}: {e}")
+
+        timeout = settings.dispatch_timeout_sec
+        log.debug(f"Executing: {' '.join(cmd[:10])} ...")
+
+        def _run():
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                    cwd=str(project_root),
+                )
+                return {
+                    "returncode": proc.returncode,
+                    "stdout": proc.stdout[-5000:] if proc.stdout else "",
+                    "stderr": proc.stderr[-2000:] if proc.stderr else "",
+                }
+            except subprocess.TimeoutExpired:
+                return {"returncode": -1, "stdout": "", "stderr": f"TIMEOUT after {timeout}s"}
+            except FileNotFoundError:
+                return {"returncode": -1, "stdout": "", "stderr": "opencode command not found"}
+            finally:
                 if context_file:
                     try:
                         os.unlink(context_file)

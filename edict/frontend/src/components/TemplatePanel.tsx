@@ -48,12 +48,16 @@ export default function TemplatePanel() {
       return;
     }
 
-    // Pre-check gateway
+    // Pre-check the active agent runtime
     try {
       const st = await api.agentsStatus();
       if (st.ok && st.gateway && !st.gateway.alive) {
-        toast('⚠️ Gateway 未启动，任务将无法派发！', 'err');
-        if (!confirm('Gateway 未启动，继续？')) return;
+        const runtimeLabel = st.gateway.label || 'Gateway';
+        const startHint = st.gateway.runtime === 'opencode'
+          ? '请运行 bash scripts/start_opencode.sh 或 bash edict.sh opencode'
+          : '请先运行 openclaw gateway start';
+        toast(`⚠️ ${runtimeLabel} 未启动，任务将无法派发！${startHint}`, 'err');
+        if (!confirm(`${runtimeLabel} 未启动，继续？`)) return;
       }
     } catch {
       /* ignore */

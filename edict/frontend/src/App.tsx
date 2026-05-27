@@ -52,7 +52,7 @@ export default function App() {
       <div className="hdr">
         <div>
           <div className="logo">三省六部 · 总控台</div>
-          <div className="sub-text">OpenClaw Sansheng-Liubu Dashboard</div>
+          <div className="sub-text">Sansheng-Liubu Agent Dashboard</div>
         </div>
         <div className="hdr-r">
           <span className={`chip ${syncOk ? 'ok' : syncOk === false ? 'err' : ''}`}>

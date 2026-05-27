@@ -13,6 +13,7 @@ data/mission_control_tasks.json
 # Logs
 *.log
 /tmp/
+.pids/
 
 # Environment
 .env
@@ -29,9 +30,17 @@ venv/
 
 # Node.js
 node_modules/
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
 edict/frontend/node_modules/
 edict/frontend/dist/
 dashboard/dist/
+# dashboard/server.py serves this checked-in production build.
+!dashboard/dist/
+!dashboard/dist/index.html
+!dashboard/dist/assets/
+!dashboard/dist/assets/**
 *.tsbuildinfo
 
 # Vite cache

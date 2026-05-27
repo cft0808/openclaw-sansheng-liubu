@@ -248,6 +248,8 @@ export interface AgentStatusInfo {
 export interface GatewayStatus {
   alive: boolean;
   probe: boolean;
+  runtime?: 'openclaw' | 'opencode' | string;
+  label?: string;
   status: string;
 }
 
