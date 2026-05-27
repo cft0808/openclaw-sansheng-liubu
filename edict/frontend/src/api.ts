@@ -300,6 +300,10 @@ export interface ActivityEntry {
   text?: string;
   thinking?: string;
   agent?: string;
+  eventId?: string;
+  eventKind?: string;
+  source?: string;
+  confidence?: string;
   from?: string;
   to?: string;
   remark?: string;
@@ -336,6 +340,17 @@ export interface ResourceSummary {
   totalElapsedSec?: number;
 }
 
+export interface StateEvidence {
+  confidence: string;
+  label: string;
+  eventCount: number;
+  latestEventKind?: string;
+  latestEventAt?: string;
+  lastObservedAt?: string;
+  ageSec?: number | null;
+  sources?: string[];
+}
+
 export interface TaskActivityData {
   ok: boolean;
   message?: string;
@@ -348,6 +363,7 @@ export interface TaskActivityData {
   totalDuration?: string;
   todosSummary?: TodosSummary;
   resourceSummary?: ResourceSummary;
+  stateEvidence?: StateEvidence;
 }
 
 export interface SchedulerInfo {

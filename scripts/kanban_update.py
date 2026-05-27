@@ -44,6 +44,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 from file_lock import atomic_json_read, atomic_json_update  # noqa: E402
 from utils import now_iso  # noqa: E402
 
+try:
+    from event_log import append_event as _ledger_append_event  # noqa: E402
+except Exception:  # pragma: no cover - event ledger must not break kanban writes
+    _ledger_append_event = None
+
 
 # ── 从 task.py 动态加载权威状态转换表（Single Source of Truth）──
 def _load_canonical_transitions() -> dict:
@@ -107,6 +112,27 @@ MAX_PROGRESS_LOG = 100  # 单任务最大进展日志条数
 
 def load():
     return atomic_json_read(TASKS_FILE, [])
+
+
+def _append_runtime_event(kind, task_id='', agent_id='', payload=None, evidence=None, confidence='high', at=None):
+    """Best-effort append to the runtime event ledger."""
+    if _ledger_append_event is None:
+        return None
+    try:
+        return _ledger_append_event(
+            kind,
+            task_id=task_id,
+            agent_id=agent_id or _infer_agent_id_from_runtime(),
+            runtime=os.environ.get('EDICT_RUNTIME', ''),
+            source=agent_id or _infer_agent_id_from_runtime() or 'kanban_update',
+            payload=payload or {},
+            evidence=evidence or {},
+            confidence=confidence,
+            at=at,
+        )
+    except Exception as exc:
+        log.debug(f'事件账本写入失败 ({kind}/{task_id}): {exc}')
+        return None
 
 _REFRESH_SIGNAL_FILE = _BASE / 'data' / '.refresh_pending'
 
@@ -322,7 +348,14 @@ def cmd_create(task_id, title, state, org, official, remark=None):
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
     log.info(f'✅ 创建 {task_id} | {title[:30]} | state={state}')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), 'create', None, state, title)
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, 'create', None, state, title)
+    _append_runtime_event('task_created', task_id, agent_id, {
+        'title': title,
+        'newState': state,
+        'to': actual_org,
+        'remark': clean_remark,
+    })
 
 
 # ── 状态流转合法性校验 ──
@@ -406,13 +439,34 @@ def cmd_state(task_id, new_state, now_text=None):
     _trigger_refresh()
     if rejected[0]:
         log.info(f'❌ {task_id} 状态转换被拒: {old_state[0]} → {new_state}')
-        _append_audit(task_id, _infer_agent_id_from_runtime(), 'state_rejected', old_state[0], new_state, '非法状态转换')
+        agent_id = _infer_agent_id_from_runtime()
+        _append_audit(task_id, agent_id, 'state_rejected', old_state[0], new_state, '非法状态转换')
+        _append_runtime_event('state_rejected', task_id, agent_id, {
+            'oldState': old_state[0],
+            'newState': new_state,
+            'reason': '非法状态转换',
+        }, confidence='high')
     elif pending_confirm[0]:
         log.info(f'⏳ {task_id} 高风险操作 {old_state[0]}→{new_state}，进入 PendingConfirm 待确认')
-        _append_audit(task_id, _infer_agent_id_from_runtime(), 'pending_confirm', old_state[0], new_state, f'需 {CONFIRM_AUTHORITY.get(old_state[0], "shangshu")} 确认')
+        agent_id = _infer_agent_id_from_runtime()
+        confirm_by = CONFIRM_AUTHORITY.get(old_state[0], "shangshu")
+        _append_audit(task_id, agent_id, 'pending_confirm', old_state[0], new_state, f'需 {confirm_by} 确认')
+        _append_runtime_event('pending_confirm', task_id, agent_id, {
+            'oldState': old_state[0],
+            'newState': 'PendingConfirm',
+            'targetState': new_state,
+            'to': confirm_by,
+            'remark': f'高风险转换待确认: {old_state[0]} -> {new_state}',
+        })
     else:
         log.info(f'✅ {task_id} 状态更新: {old_state[0]} → {new_state}')
-        _append_audit(task_id, _infer_agent_id_from_runtime(), 'state', old_state[0], new_state, now_text or '')
+        agent_id = _infer_agent_id_from_runtime()
+        _append_audit(task_id, agent_id, 'state', old_state[0], new_state, now_text or '')
+        _append_runtime_event('state_changed', task_id, agent_id, {
+            'oldState': old_state[0],
+            'newState': new_state,
+            'remark': now_text or '',
+        })
 
 
 def cmd_flow(task_id, from_dept, to_dept, remark):
@@ -420,13 +474,16 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
     clean_remark = _sanitize_remark(remark)
     agent_id = _infer_agent_id_from_runtime()
     agent_label = _AGENT_LABELS.get(agent_id, agent_id)
+    flow_at = [None]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
             log.error(f'任务 {task_id} 不存在')
             return tasks
+        at = now_iso()
+        flow_at[0] = at
         t.setdefault('flow_log', []).append({
-            "at": now_iso(), "from": from_dept, "to": to_dept, "remark": clean_remark,
+            "at": at, "from": from_dept, "to": to_dept, "remark": clean_remark,
             "agent": agent_id, "agentLabel": agent_label,
         })
         # 同步更新 org，使看板能正确显示当前所属部门
@@ -437,12 +494,18 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
     _trigger_refresh()
     log.info(f'✅ {task_id} 流转记录: {from_dept} → {to_dept}')
     _append_audit(task_id, _infer_agent_id_from_runtime(), 'flow', from_dept, to_dept, clean_remark)
+    _append_runtime_event('flow_recorded', task_id, agent_id, {
+        'from': from_dept,
+        'to': to_dept,
+        'remark': clean_remark,
+    }, at=flow_at[0])
 
 
 def cmd_done(task_id, output_path='', summary=''):
     """执行部门回报完成，任务进入 Review 待尚书省汇总审查。"""
     rejected = [False]
     reject_reason = ['']
+    done_payload = [{}]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
@@ -452,22 +515,34 @@ def cmd_done(task_id, output_path='', summary=''):
         if old_state not in ('Doing', 'Next'):
             rejected[0] = True
             reject_reason[0] = f'当前状态 {old_state} 不允许直接上报完成'
+            done_payload[0] = {'oldState': old_state, 'newState': 'Review'}
             return tasks
         completed, total = _todo_counts(t)
         if total > 0 and completed < total:
             rejected[0] = True
             reject_reason[0] = f'todos 未完成（{completed}/{total}），禁止直接收口'
+            done_payload[0] = {'oldState': old_state, 'newState': 'Review'}
             return tasks
 
         from_org = t.get('org', '执行部门')
+        at = now_iso()
         t['state'] = 'Review'
         t['org'] = STATE_ORG_MAP.get('Review', t.get('org', ''))
         t['output'] = output_path
         t['now'] = summary or '执行已完成，提交尚书省汇总审查'
         t.setdefault('flow_log', []).append({
-            "at": now_iso(), "from": from_org,
+            "at": at, "from": from_org,
             "to": "尚书省", "remark": f"✅ 执行完成，提交审查：{summary or '待尚书省汇总'}"
         })
+        done_payload[0] = {
+            'oldState': old_state,
+            'newState': 'Review',
+            'from': from_org,
+            'to': '尚书省',
+            'summary': summary or '',
+            'outputPath': output_path,
+            'at': at,
+        }
         # 同步设置 outputMeta，避免依赖 refresh_live_data.py 异步补充
         if output_path:
             p = pathlib.Path(output_path)
@@ -482,19 +557,28 @@ def cmd_done(task_id, output_path='', summary=''):
     _trigger_refresh()
     if rejected[0]:
         log.warning(f'⚠️ {task_id} done 被拒绝：{reject_reason[0]}')
-        _append_audit(task_id, _infer_agent_id_from_runtime(), 'done_rejected', None, 'Review', reject_reason[0])
+        agent_id = _infer_agent_id_from_runtime()
+        _append_audit(task_id, agent_id, 'done_rejected', None, 'Review', reject_reason[0])
+        _append_runtime_event('state_rejected', task_id, agent_id, {
+            **done_payload[0],
+            'reason': reject_reason[0],
+        }, confidence='high')
         return
     log.info(f'✅ {task_id} 执行完成，已提交尚书省审查')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), 'done', None, 'Review', summary or '')
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, 'done', None, 'Review', summary or '')
+    _append_runtime_event('task_done', task_id, agent_id, done_payload[0], at=done_payload[0].get('at'))
 
 
 def cmd_block(task_id, reason):
     """标记阻塞（原子操作）"""
+    old_state = ['']
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
             log.error(f'任务 {task_id} 不存在')
             return tasks
+        old_state[0] = t.get('state', '')
         t['state'] = 'Blocked'
         t['block'] = reason
         t['updatedAt'] = now_iso()
@@ -502,7 +586,13 @@ def cmd_block(task_id, reason):
     atomic_json_update(TASKS_FILE, modifier, [])
     _trigger_refresh()
     log.warning(f'⚠️ {task_id} 已阻塞: {reason}')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), 'block', None, 'Blocked', reason)
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, 'block', None, 'Blocked', reason)
+    _append_runtime_event('task_blocked', task_id, agent_id, {
+        'oldState': old_state[0],
+        'newState': 'Blocked',
+        'reason': reason,
+    }, confidence='high')
 
 
 def cmd_confirm(task_id, action, reason=''):
@@ -552,7 +642,14 @@ def cmd_confirm(task_id, action, reason=''):
         log.info(f'❌ {task_id} confirm 操作失败')
     else:
         log.info(f'✅ {task_id} confirm {action} → {result_state[0]}')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), f'confirm_{action}', 'PendingConfirm', result_state[0], reason)
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, f'confirm_{action}', 'PendingConfirm', result_state[0], reason)
+    _append_runtime_event('confirm_applied' if not rejected[0] else 'state_rejected', task_id, agent_id, {
+        'oldState': 'PendingConfirm',
+        'newState': result_state[0] or '',
+        'action': action,
+        'reason': reason,
+    }, confidence='high' if not rejected[0] else 'low')
 
 
 def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0):
@@ -606,6 +703,7 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
 
     done_cnt = [0]
     total_cnt = [0]
+    event_payload = [{}]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
@@ -632,6 +730,7 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
         if elapsed > 0:
             log_entry['elapsed'] = elapsed
         t.setdefault('progress_log', []).append(log_entry)
+        event_payload[0] = dict(log_entry)
         # 限制 progress_log 大小，防止无限增长
         if len(t['progress_log']) > MAX_PROGRESS_LOG:
             t['progress_log'] = t['progress_log'][-MAX_PROGRESS_LOG:]
@@ -645,7 +744,9 @@ def cmd_progress(task_id, now_text, todos_pipe='', tokens=0, cost=0.0, elapsed=0
     if tokens or cost or elapsed:
         res_info = f' [res: {tokens}tok/${cost:.4f}/{elapsed}s]'
     log.info(f'📡 {task_id} 进展: {clean[:40]}... [{done_cnt[0]}/{total_cnt[0]}]{res_info}')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), 'progress', None, None, clean)
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, 'progress', None, None, clean)
+    _append_runtime_event('progress_reported', task_id, event_payload[0].get('agent') or agent_id, event_payload[0], at=event_payload[0].get('at'))
 
 def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
     """添加或更新子任务 todo（原子操作）
@@ -661,6 +762,7 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
     result_info = [0, 0]
     rejected = [False]
     ready_to_close = [False]
+    todo_event = [{}]
     def modifier(tasks):
         t = find_task(tasks, task_id)
         if not t:
@@ -679,9 +781,16 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
                     f'请先完成或取消后再开始 #{todo_id}'
                 )
                 rejected[0] = True
+                todo_event[0] = {
+                    'todoId': todo_id,
+                    'status': status,
+                    'title': title,
+                    'reason': 'single in-progress constraint',
+                }
                 return tasks
 
         existing = next((td for td in t['todos'] if str(td.get('id')) == str(todo_id)), None)
+        previous_status = existing.get('status') if existing else ''
         if existing:
             existing['status'] = status
             if title:
@@ -693,9 +802,20 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
             if detail:
                 item['detail'] = detail
             t['todos'].append(item)
+        todo_event[0] = {
+            'todoId': todo_id,
+            'status': status,
+            'previousStatus': previous_status,
+            'title': title,
+            'detail': detail,
+            'completed': result_info[0],
+            'total': result_info[1],
+        }
         t['updatedAt'] = now_iso()
         result_info[0] = sum(1 for td in t['todos'] if td.get('status') == 'completed')
         result_info[1] = len(t['todos'])
+        todo_event[0]['completed'] = result_info[0]
+        todo_event[0]['total'] = result_info[1]
         # 所有 todo 完成 → 标记 ready_to_close
         if result_info[1] > 0 and result_info[0] == result_info[1]:
             t['ready_to_close'] = True
@@ -705,12 +825,16 @@ def cmd_todo(task_id, todo_id, title, status='not-started', detail=''):
     _trigger_refresh()
     if rejected[0]:
         log.info(f'❌ {task_id} todo #{todo_id} → in-progress 被拒（已有进行中的 todo）')
-        _append_audit(task_id, _infer_agent_id_from_runtime(), 'todo_rejected', todo_id, 'in-progress', 'single in-progress constraint')
+        agent_id = _infer_agent_id_from_runtime()
+        _append_audit(task_id, agent_id, 'todo_rejected', todo_id, 'in-progress', 'single in-progress constraint')
+        _append_runtime_event('todo_rejected', task_id, agent_id, todo_event[0], confidence='high')
         return
     log.info(f'✅ {task_id} todo [{result_info[0]}/{result_info[1]}]: {todo_id} → {status}')
     if ready_to_close[0]:
         log.info(f'🎯 {task_id} 所有子任务完成，ready_to_close=true')
-    _append_audit(task_id, _infer_agent_id_from_runtime(), 'todo', todo_id, status, title)
+    agent_id = _infer_agent_id_from_runtime()
+    _append_audit(task_id, agent_id, 'todo', todo_id, status, title)
+    _append_runtime_event('todo_updated', task_id, agent_id, todo_event[0])
 
 
 # ── 三级记忆系统 ──
@@ -795,6 +919,12 @@ def cmd_task_memo(task_id, agent_id, decisions, warnings=''):
     atomic_json_update(memo_file, modifier, {})
     log.info(f'📝 {task_id} 任务记忆: {agent_id} → {len(decision_list)} 决策')
     _append_audit(task_id, agent_id, 'task_memo', None, None, f'{len(decision_list)} decisions')
+    _append_runtime_event('task_memo_recorded', task_id, agent_id, {
+        'decisions': decision_list,
+        'warnings': warning_list,
+        'phase': phase,
+        'summary': f'{len(decision_list)} decisions',
+    })
 
 
 def cmd_shared_memo(content, added_by):
@@ -814,6 +944,10 @@ def cmd_shared_memo(content, added_by):
     atomic_json_update(SHARED_MEMORY_FILE, modifier, {})
     log.info(f'🌐 全局记忆写入: {content[:40]}... (by {added_by})')
     _append_audit('system', added_by, 'shared_memo', None, None, content)
+    _append_runtime_event('shared_memo_recorded', 'system', added_by, {
+        'summary': content,
+        'addedBy': added_by,
+    })
 
 
 # ── 子 Agent 无状态委派 ──
@@ -849,10 +983,20 @@ def cmd_delegate(task_id, from_agent, to_agent, instruction, return_spec=''):
     if depth > MAX_DELEGATION_DEPTH:
         log.error(f'❌ 委派深度超限 ({depth} > {MAX_DELEGATION_DEPTH})，拒绝委派')
         _append_audit(task_id, from_agent, 'delegate_rejected', None, None, f'depth={depth} exceeds limit')
+        _append_runtime_event('agent_message_failed', task_id, from_agent, {
+            'from': from_agent,
+            'to': to_agent,
+            'error': f'delegation depth {depth} exceeds limit',
+        }, confidence='high')
         return
     if to_agent in path[:-1]:
         log.error(f'❌ 检测到循环委派 ({" → ".join(path)})，拒绝')
         _append_audit(task_id, from_agent, 'delegate_rejected', None, None, f'circular: {" → ".join(path)}')
+        _append_runtime_event('agent_message_failed', task_id, from_agent, {
+            'from': from_agent,
+            'to': to_agent,
+            'error': f'circular delegation: {" -> ".join(path)}',
+        }, confidence='high')
         return
 
     sub_task_id = f'{task_id}-sub-{_short_uuid()}'
@@ -891,6 +1035,16 @@ def cmd_delegate(task_id, from_agent, to_agent, instruction, return_spec=''):
     _trigger_refresh()
     log.info(f'📋 委派 {sub_task_id}: {from_agent} → {to_agent} (depth={depth})')
     _append_audit(task_id, from_agent, 'delegate', to_agent, sub_task_id, instruction)
+    _append_runtime_event('agent_message_sent', task_id, to_agent, {
+        'from': from_agent,
+        'to': to_agent,
+        'message': instruction,
+        'summary': f'委派子任务 {sub_task_id}',
+        'subTaskId': sub_task_id,
+        'returnSpec': return_spec,
+        'delegationDepth': depth,
+        'delegationPath': path,
+    })
 
 
 def cmd_delegate_result(sub_task_id, result_json):
@@ -938,6 +1092,12 @@ def cmd_delegate_result(sub_task_id, result_json):
     _trigger_refresh()
     log.info(f'✅ 委派结果 {sub_task_id} → 父任务 {parent_id}')
     _append_audit(parent_id, to_agent, 'delegate_result', sub_task_id, None, result_json[:100])
+    _append_runtime_event('agent_message_done', parent_id, to_agent, {
+        'from': to_agent,
+        'to': from_agent,
+        'summary': result_json[:300],
+        'subTaskId': sub_task_id,
+    })
 
 _CMD_MIN_ARGS = {
     'create': 6, 'state': 3, 'flow': 5, 'done': 2, 'block': 3, 'confirm': 3,

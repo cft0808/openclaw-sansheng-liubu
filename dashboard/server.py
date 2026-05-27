@@ -32,6 +32,16 @@ from court_discuss import (
     list_sessions as cd_list, destroy_session as cd_destroy,
     get_fate_event as cd_fate, OFFICIAL_PROFILES as CD_PROFILES,
 )
+try:
+    from event_log import (
+        append_event as _ledger_append_event,
+        list_events as _ledger_list_events,
+        event_to_activity_entries as _ledger_event_to_activity_entries,
+    )
+except Exception:  # pragma: no cover - dashboard can run without the ledger module
+    _ledger_append_event = None
+    _ledger_list_events = None
+    _ledger_event_to_activity_entries = None
 
 log = logging.getLogger('server')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
@@ -42,6 +52,7 @@ if str(CHANNELS_DIR.parent) not in sys.path:
 from channels import get_channel, get_channel_info, CHANNELS as NOTIFICATION_CHANNELS
 
 OCLAW_HOME = pathlib.Path.home() / '.openclaw'
+OPENCODE_HOME = pathlib.Path(os.environ.get('OPENCODE_HOME', str(pathlib.Path.home() / '.local' / 'share' / 'opencode'))).expanduser()
 MAX_REQUEST_BODY = 1 * 1024 * 1024  # 1 MB
 ALLOWED_ORIGIN = None  # Set via --cors; None means restrict to localhost
 _DASHBOARD_PORT = 7891  # Updated at startup from --port arg
@@ -56,6 +67,27 @@ DIST = BASE / 'dist'          # React 构建产物 (npm run build)
 DATA = BASE.parent / "data"
 SCRIPTS = BASE.parent / 'scripts'
 _ACTIVE_TASK_DATA_DIR = None
+
+
+def _append_runtime_event(kind, task_id='', agent_id='', payload=None, evidence=None, confidence='high', at=None):
+    """Best-effort append to the task/agent event ledger."""
+    if _ledger_append_event is None:
+        return None
+    try:
+        return _ledger_append_event(
+            kind,
+            task_id=task_id,
+            agent_id=agent_id,
+            runtime=_agent_runtime() if '_agent_runtime' in globals() else os.environ.get('EDICT_RUNTIME', ''),
+            source='dashboard',
+            payload=payload or {},
+            evidence=evidence or {},
+            confidence=confidence,
+            at=at,
+        )
+    except Exception as exc:
+        log.debug(f'event ledger append failed ({kind}/{task_id}): {exc}')
+        return None
 
 # 静态资源 MIME 类型
 _MIME_TYPES = {
@@ -1155,9 +1187,24 @@ def wake_agent(agent_id, message=''):
             log.info(f'🔔 唤醒 {agent_id}...')
             # 带重试（最多2次）
             for attempt in range(1, 3):
+                _append_runtime_event('agent_message_sent', '', agent_id, {
+                    'from': 'dashboard',
+                    'to': agent_id,
+                    'message': msg,
+                    'type': 'wake',
+                    'status': 'started',
+                    'attempt': attempt,
+                })
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=130)
                 if result.returncode == 0:
                     log.info(f'✅ {agent_id} 已唤醒')
+                    _append_runtime_event('agent_message_done', '', agent_id, {
+                        'from': agent_id,
+                        'to': 'dashboard',
+                        'summary': 'wake command accepted',
+                        'status': 'success',
+                        'attempt': attempt,
+                    })
                     return
                 err_msg = result.stderr[:200] if result.stderr else result.stdout[:200]
                 log.warning(f'⚠️ {agent_id} 唤醒失败(第{attempt}次): {err_msg}')
@@ -1165,10 +1212,28 @@ def wake_agent(agent_id, message=''):
                     import time
                     time.sleep(5)
             log.error(f'❌ {agent_id} 唤醒最终失败')
+            _append_runtime_event('agent_message_failed', '', agent_id, {
+                'from': 'dashboard',
+                'to': agent_id,
+                'error': 'wake failed after retries',
+                'status': 'failed',
+            }, confidence='low')
         except subprocess.TimeoutExpired:
             log.error(f'❌ {agent_id} 唤醒超时(130s)')
+            _append_runtime_event('agent_message_failed', '', agent_id, {
+                'from': 'dashboard',
+                'to': agent_id,
+                'error': 'wake timeout',
+                'status': 'timeout',
+            }, confidence='low')
         except Exception as e:
             log.warning(f'⚠️ {agent_id} 唤醒异常: {e}')
+            _append_runtime_event('agent_message_failed', '', agent_id, {
+                'from': 'dashboard',
+                'to': agent_id,
+                'error': str(e)[:200],
+                'status': 'error',
+            }, confidence='low')
     threading.Thread(target=do_wake, daemon=True).start()
 
     return {'ok': True, 'message': f'{agent_id} 唤醒指令已发出，约10-30秒后生效'}
@@ -1714,10 +1779,212 @@ def _parse_activity_entry(item):
     return None
 
 
+def _opencode_ts_to_iso(value):
+    try:
+        if value is None:
+            return ''
+        if isinstance(value, str):
+            return value
+        ts = float(value)
+        if ts > 10_000_000_000:
+            ts = ts / 1000
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    except Exception:
+        return ''
+
+
+def _opencode_part_time(part):
+    state_time = ((part.get('state') or {}).get('time') or {})
+    part_time = part.get('time') or {}
+    return (
+        state_time.get('start')
+        or part_time.get('start')
+        or state_time.get('end')
+        or part_time.get('end')
+        or 0
+    )
+
+
+def _read_opencode_json(path):
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+
+
+def _opencode_storage():
+    return OPENCODE_HOME / 'storage'
+
+
+def _opencode_session_candidates(agent_id='', task_id=None, keywords=None, limit_sessions=5):
+    storage = _opencode_storage()
+    sessions_root = storage / 'session'
+    messages_root = storage / 'message'
+    if not sessions_root.exists():
+        return []
+
+    candidates = []
+    for path in sessions_root.glob('*/*.json'):
+        session = _read_opencode_json(path)
+        if not isinstance(session, dict):
+            continue
+        sid = session.get('id') or path.stem
+        directory = str(session.get('directory') or '')
+        if directory and pathlib.Path(directory).resolve() != BASE.parent.resolve():
+            continue
+
+        msg_dir = messages_root / sid
+        messages = []
+        if msg_dir.exists():
+            for msg_path in sorted(msg_dir.glob('*.json')):
+                msg = _read_opencode_json(msg_path)
+                if isinstance(msg, dict):
+                    messages.append(msg)
+        if agent_id and messages and not any(m.get('agent') == agent_id for m in messages):
+            continue
+
+        haystack = ' '.join([
+            str(session.get('title') or ''),
+            sid,
+            ' '.join(str((m.get('summary') or {}).get('title') or '') for m in messages),
+        ]).lower()
+        if task_id and task_id.lower() not in haystack:
+            continue
+        if keywords:
+            hits = sum(1 for kw in keywords if str(kw).lower() in haystack)
+            if hits < min(2, len(keywords)):
+                continue
+
+        updated = ((session.get('time') or {}).get('updated') or (session.get('time') or {}).get('created') or 0)
+        candidates.append((int(updated or 0), session, messages))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[:limit_sessions]
+
+
+def _opencode_input_preview(value):
+    if not value:
+        return ''
+    try:
+        if isinstance(value, dict):
+            if value.get('description'):
+                return str(value.get('description'))[:120]
+            if value.get('command'):
+                return str(value.get('command'))[:120]
+        return json.dumps(value, ensure_ascii=False)[:120]
+    except Exception:
+        return str(value)[:120]
+
+
+def _parse_opencode_parts(message, limit_per_message=20):
+    storage = _opencode_storage()
+    msg_id = message.get('id', '')
+    part_dir = storage / 'part' / msg_id
+    if not part_dir.exists():
+        summary = (message.get('summary') or {}).get('title') or ''
+        role = str(message.get('role') or '').lower()
+        at = _opencode_ts_to_iso((message.get('time') or {}).get('created'))
+        if summary and role == 'user':
+            return [{'at': at, 'kind': 'user', 'text': summary[:200], 'agent': message.get('agent', '')}]
+        if summary:
+            return [{'at': at, 'kind': 'assistant', 'text': summary[:300], 'agent': message.get('agent', '')}]
+        return []
+
+    parts = []
+    for path in sorted(part_dir.glob('*.json')):
+        part = _read_opencode_json(path)
+        if isinstance(part, dict):
+            parts.append(part)
+    parts.sort(key=_opencode_part_time)
+
+    entries = []
+    agent = message.get('agent', '')
+    role = str(message.get('role') or '').lower()
+    for part in parts[:limit_per_message]:
+        ptype = part.get('type')
+        at = _opencode_ts_to_iso(_opencode_part_time(part) or (message.get('time') or {}).get('created'))
+        if ptype == 'text' and part.get('text'):
+            entries.append({
+                'at': at,
+                'kind': 'user' if role == 'user' else 'assistant',
+                'text': str(part.get('text', '')).strip()[:300],
+                'agent': agent,
+                'source': 'opencode-storage',
+                'eventKind': 'opencode_text',
+            })
+        elif ptype == 'tool':
+            state = part.get('state') or {}
+            tool_name = part.get('tool') or state.get('tool') or ''
+            status = state.get('status', '')
+            tool_entry = {
+                'at': at,
+                'kind': 'assistant',
+                'agent': agent,
+                'tools': [{
+                    'name': tool_name,
+                    'input_preview': _opencode_input_preview(state.get('input')),
+                }],
+                'source': 'opencode-storage',
+                'eventKind': 'opencode_tool_call',
+            }
+            entries.append(tool_entry)
+
+            output = state.get('output') or state.get('error') or state.get('title') or ''
+            metadata = state.get('metadata') or {}
+            exit_code = metadata.get('exit')
+            if exit_code is None and status and status != 'completed':
+                exit_code = 1
+            entries.append({
+                'at': _opencode_ts_to_iso(((state.get('time') or {}).get('end')) or _opencode_part_time(part)),
+                'kind': 'tool_result',
+                'agent': agent,
+                'tool': tool_name,
+                'output': str(output).strip()[:250],
+                'exitCode': exit_code,
+                'source': 'opencode-storage',
+                'eventKind': 'opencode_tool_result',
+            })
+        elif ptype == 'step-finish':
+            tokens = part.get('tokens') or {}
+            total_tokens = 0
+            for val in tokens.values():
+                if isinstance(val, dict):
+                    total_tokens += sum(v for v in val.values() if isinstance(v, (int, float)))
+                elif isinstance(val, (int, float)):
+                    total_tokens += val
+            if total_tokens or part.get('cost'):
+                entries.append({
+                    'at': at,
+                    'kind': 'progress',
+                    'agent': agent,
+                    'text': f"模型步骤完成: {part.get('reason', '') or 'finished'}",
+                    'tokens': int(total_tokens) if total_tokens else 0,
+                    'cost': part.get('cost') or 0,
+                    'source': 'opencode-storage',
+                    'eventKind': 'opencode_step_finish',
+                })
+    return entries
+
+
+def get_opencode_agent_activity(agent_id, limit=30, task_id=None, keywords=None):
+    entries = []
+    candidates = _opencode_session_candidates(agent_id, task_id=task_id, keywords=keywords, limit_sessions=5 if (task_id or keywords) else 1)
+    for _updated, _session, messages in candidates:
+        for message in sorted(messages, key=lambda m: ((m.get('time') or {}).get('created') or 0)):
+            if agent_id and message.get('agent') and message.get('agent') != agent_id:
+                continue
+            entries.extend(_parse_opencode_parts(message))
+    entries.sort(key=lambda e: e.get('at', ''))
+    return entries[-limit:]
+
+
 def get_agent_activity(agent_id, limit=30, task_id=None):
     """从 Agent 的 session jsonl 读取最近活动。
     如果 task_id 不为空，只返回提及该 task_id 的相关条目。
     """
+    if _agent_runtime() == 'opencode':
+        return get_opencode_agent_activity(agent_id, limit=limit, task_id=task_id)
+
     sessions_dir = OCLAW_HOME / 'agents' / agent_id / 'sessions'
     if not sessions_dir.exists():
         return []
@@ -1787,6 +2054,9 @@ def get_agent_activity_by_keywords(agent_id, keywords, limit=20):
     """从 agent session 中按关键词匹配获取活动条目。
     找到包含关键词的 session 文件，只读该文件的活动。
     """
+    if _agent_runtime() == 'opencode':
+        return get_opencode_agent_activity(agent_id, limit=limit, keywords=keywords)
+
     sessions_dir = OCLAW_HOME / 'agents' / agent_id / 'sessions'
     if not sessions_dir.exists():
         return []
@@ -1873,6 +2143,9 @@ def get_agent_latest_segment(agent_id, limit=20):
     """获取 Agent 最新一轮对话段（最后一条 user 消息起的所有内容）。
     用于活跃任务没有精确匹配时，展示 Agent 的实时工作状态。
     """
+    if _agent_runtime() == 'opencode':
+        return get_opencode_agent_activity(agent_id, limit=limit)
+
     sessions_dir = OCLAW_HOME / 'agents' / agent_id / 'sessions'
     if not sessions_dir.exists():
         return []
@@ -2003,6 +2276,95 @@ def _compute_todos_diff(prev_todos, curr_todos):
     if not changed and not added and not removed:
         return None
     return {'changed': changed, 'added': added, 'removed': removed}
+
+
+def _activity_key(entry):
+    kind = entry.get('kind', '')
+    at = entry.get('at', '')
+    if kind == 'flow':
+        return (kind, at, entry.get('from', ''), entry.get('to', ''), entry.get('remark', ''))
+    if kind == 'progress':
+        return (kind, at, entry.get('agent', ''), entry.get('text', ''))
+    if kind == 'todos':
+        items = entry.get('items') or []
+        todo_sig = tuple((str(i.get('id', '')), i.get('status', ''), i.get('title', '')) for i in items)
+        return (kind, at, entry.get('agent', ''), todo_sig)
+    if kind == 'tool_result':
+        return (kind, at, entry.get('agent', ''), entry.get('tool', ''), entry.get('output', '')[:120])
+    return (kind, at, entry.get('agent', ''), entry.get('text', '') or entry.get('eventKind', ''))
+
+
+def _parse_activity_dt(value):
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            # OpenClaw/OpenCode JSONL can use millisecond timestamps.
+            if value > 10_000_000_000:
+                value = value / 1000
+            return datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+        return datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+
+def _build_state_evidence(task, events, activity):
+    state = task.get('state', '')
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    latest_event = events[-1] if events else None
+    latest_activity_dt = None
+    for entry in activity:
+        dt = _parse_activity_dt(entry.get('at'))
+        if dt and (latest_activity_dt is None or dt > latest_activity_dt):
+            latest_activity_dt = dt
+
+    latest_event_dt = _parse_activity_dt(latest_event.get('at')) if latest_event else None
+    if latest_event_dt:
+        age_sec = max(0, int((now_utc - latest_event_dt).total_seconds()))
+    elif latest_activity_dt:
+        age_sec = max(0, int((now_utc - latest_activity_dt).total_seconds()))
+    else:
+        age_sec = None
+
+    failure_kinds = {'dispatch_failed', 'dispatch_gateway_offline', 'dispatch_missing_cli', 'agent_message_failed', 'state_rejected'}
+    if state in ('Done', 'Cancelled'):
+        confidence = 'complete'
+        label = '流程已收口'
+    elif latest_event and latest_event.get('kind') in failure_kinds:
+        confidence = 'low'
+        label = '最近事件为异常'
+    elif latest_event_dt and age_sec is not None and age_sec <= 300:
+        confidence = 'high'
+        label = '5分钟内有运行证据'
+    elif latest_event_dt and age_sec is not None and age_sec <= 1800:
+        confidence = 'medium'
+        label = '30分钟内有运行证据'
+    elif latest_activity_dt and age_sec is not None and age_sec <= 1800:
+        confidence = 'medium'
+        label = '仅有旧活动日志证据'
+    else:
+        confidence = 'low'
+        label = '缺少近期运行证据'
+
+    sources = []
+    if events:
+        sources.append('event-ledger')
+    if any(a.get('source') != 'event-ledger' for a in activity):
+        sources.append('task/session')
+
+    return {
+        'confidence': confidence,
+        'label': label,
+        'eventCount': len(events),
+        'latestEventKind': latest_event.get('kind', '') if latest_event else '',
+        'latestEventAt': latest_event.get('at', '') if latest_event else '',
+        'lastObservedAt': (
+            (latest_event_dt or latest_activity_dt).isoformat(timespec='seconds').replace('+00:00', 'Z')
+            if (latest_event_dt or latest_activity_dt) else ''
+        ),
+        'ageSec': age_sec,
+        'sources': sources,
+    }
 
 
 def get_task_activity(task_id):
@@ -2196,6 +2558,35 @@ def get_task_activity(task_id):
     except Exception as e:
         log.warning(f'Session JSONL 融合失败 (task={task_id}): {e}')
 
+    # ── 融合事件账本（调度、Agent 通讯、工具调用、状态证据）──
+    ledger_events = []
+    if _ledger_list_events and _ledger_event_to_activity_entries:
+        try:
+            ledger_events = _ledger_list_events(task_id=task_id, limit=200)
+            existing_keys = {_activity_key(a) for a in activity}
+            for event in ledger_events:
+                for entry in _ledger_event_to_activity_entries(event):
+                    key = _activity_key(entry)
+                    if key in existing_keys:
+                        # 保留旧条目，但补上证据字段，方便前端/调试判断来源。
+                        for old in activity:
+                            if _activity_key(old) == key:
+                                old.setdefault('eventId', entry.get('eventId', ''))
+                                old.setdefault('eventKind', entry.get('eventKind', ''))
+                                old.setdefault('source', 'task/session+event-ledger')
+                                old.setdefault('confidence', entry.get('confidence', ''))
+                                break
+                        continue
+                    activity.append(entry)
+                    existing_keys.add(key)
+            activity.sort(key=lambda x: x.get('at', ''))
+            for event in ledger_events:
+                aid = event.get('agentId') or (event.get('payload') or {}).get('to') or ''
+                if aid:
+                    related_agents.add(aid)
+        except Exception as e:
+            log.warning(f'事件账本融合失败 (task={task_id}): {e}')
+
     # ── 阶段耗时统计 ──
     phase_durations = _compute_phase_durations(flow_log)
 
@@ -2244,10 +2635,11 @@ def get_task_activity(task_id):
         'agentLabel': _STATE_LABELS.get(state, state),
         'lastActive': last_active,
         'activity': activity,
-        'activitySource': 'progress+session',
+        'activitySource': 'progress+session+event-ledger' if ledger_events else 'progress+session',
         'relatedAgents': sorted(list(related_agents)),
         'phaseDurations': phase_durations,
         'totalDuration': total_duration,
+        'stateEvidence': _build_state_evidence(task, ledger_events, activity),
     }
     if todos_summary:
         result['todosSummary'] = todos_summary
@@ -2296,6 +2688,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
         }),
         _scheduler_add_flow(t, f'已入队派发：{new_state} → {agent_id}（{trigger}）', to=_STATE_LABELS.get(new_state, new_state))
     ))
+    _append_runtime_event('dispatch_queued', task_id, agent_id, {
+        'from': 'scheduler',
+        'to': agent_id,
+        'newState': new_state,
+        'trigger': trigger,
+        'status': 'queued',
+        'remark': f'已入队派发: {new_state} -> {agent_id}',
+    })
 
     title = task.get('title', '(无标题)')
     target_dept = task.get('targetDept', '')
@@ -2360,6 +2760,13 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                     'lastDispatchAgent': agent_id,
                     'lastDispatchTrigger': trigger,
                 }))
+                _append_runtime_event('dispatch_gateway_offline', task_id, agent_id, {
+                    'from': runtime_label,
+                    'to': agent_id,
+                    'trigger': trigger,
+                    'status': 'gateway-offline',
+                    'remark': f'{runtime_label} 未启动，派发跳过',
+                }, confidence='low')
                 return
             if runtime == 'opencode':
                 opencode_bin = _resolve_opencode_bin()
@@ -2378,6 +2785,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                         }),
                         _scheduler_add_flow(t, flow_msg, to=t.get('org', ''))
                     ))
+                    _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
+                        'from': runtime_label,
+                        'to': agent_id,
+                        'trigger': trigger,
+                        'status': status,
+                        'remark': flow_msg,
+                        'error': err,
+                    }, confidence='low')
                     return
                 cmd = [
                     opencode_bin, 'run',
@@ -2410,6 +2825,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                         }),
                         _scheduler_add_flow(t, f'派发异常：OpenClaw CLI 未找到（{trigger}）', to=t.get('org', ''))
                     ))
+                    _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
+                        'from': runtime_label,
+                        'to': agent_id,
+                        'trigger': trigger,
+                        'status': 'openclaw-missing',
+                        'remark': f'派发异常：OpenClaw CLI 未找到（{trigger}）',
+                        'error': err,
+                    }, confidence='low')
                     return
                 cmd = [openclaw_bin, 'agent', '--agent', agent_id, '-m', msg, '--timeout', '300']
                 if _channel:
@@ -2418,6 +2841,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
             err = ''
             for attempt in range(1, max_retries + 1):
                 log.info(f'🔄 自动派发 {task_id} → {agent_id} (第{attempt}次)...')
+                _append_runtime_event('dispatch_started', task_id, agent_id, {
+                    'from': runtime_label,
+                    'to': agent_id,
+                    'trigger': trigger,
+                    'status': 'started',
+                    'attempt': attempt,
+                    'remark': f'开始派发: {agent_id} (第{attempt}次)',
+                })
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=310)
                 if result.returncode == 0:
                     log.info(f'✅ {task_id} 自动派发成功 → {agent_id}')
@@ -2431,6 +2862,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                         }),
                         _scheduler_add_flow(t, f'派发成功：{agent_id}（{trigger}）', to=t.get('org', ''))
                     ))
+                    _append_runtime_event('dispatch_succeeded', task_id, agent_id, {
+                        'from': runtime_label,
+                        'to': agent_id,
+                        'trigger': trigger,
+                        'status': 'success',
+                        'attempt': attempt,
+                        'remark': f'派发成功: {agent_id}（{trigger}）',
+                    })
                     return
                 err = result.stderr[:200] if result.stderr else result.stdout[:200]
                 log.warning(f'⚠️ {task_id} 自动派发失败(第{attempt}次): {err}')
@@ -2448,6 +2887,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 }),
                 _scheduler_add_flow(t, f'派发失败：{agent_id}（{trigger}）', to=t.get('org', ''))
             ))
+            _append_runtime_event('dispatch_failed', task_id, agent_id, {
+                'from': runtime_label,
+                'to': agent_id,
+                'trigger': trigger,
+                'status': 'failed',
+                'remark': f'派发失败: {agent_id}（{trigger}）',
+                'error': err,
+            }, confidence='low')
         except subprocess.TimeoutExpired:
             log.error(f'❌ {task_id} 自动派发超时 → {agent_id}')
             _update_task_scheduler(task_id, lambda t, s: (
@@ -2460,6 +2907,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 }),
                 _scheduler_add_flow(t, f'派发超时：{agent_id}（{trigger}）', to=t.get('org', ''))
             ))
+            _append_runtime_event('dispatch_failed', task_id, agent_id, {
+                'from': runtime_label,
+                'to': agent_id,
+                'trigger': trigger,
+                'status': 'timeout',
+                'remark': f'派发超时: {agent_id}（{trigger}）',
+                'error': 'timeout',
+            }, confidence='low')
         except FileNotFoundError as e:
             missing_runtime = 'OpenCode' if runtime == 'opencode' else 'OpenClaw'
             missing_status = 'opencode-missing' if runtime == 'opencode' else 'openclaw-missing'
@@ -2475,6 +2930,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 }),
                 _scheduler_add_flow(t, f'派发异常：{missing_runtime} CLI 未找到（{trigger}）', to=t.get('org', ''))
             ))
+            _append_runtime_event('dispatch_missing_cli', task_id, agent_id, {
+                'from': runtime_label,
+                'to': agent_id,
+                'trigger': trigger,
+                'status': missing_status,
+                'remark': f'派发异常：{missing_runtime} CLI 未找到（{trigger}）',
+                'error': err[:200],
+            }, confidence='low')
         except Exception as e:
             log.warning(f'⚠️ {task_id} 自动派发异常: {e}')
             _update_task_scheduler(task_id, lambda t, s: (
@@ -2487,6 +2950,14 @@ def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
                 }),
                 _scheduler_add_flow(t, f'派发异常：{agent_id}（{trigger}）', to=t.get('org', ''))
             ))
+            _append_runtime_event('dispatch_failed', task_id, agent_id, {
+                'from': runtime_label,
+                'to': agent_id,
+                'trigger': trigger,
+                'status': 'error',
+                'remark': f'派发异常: {agent_id}（{trigger}）',
+                'error': str(e)[:200],
+            }, confidence='low')
 
     threading.Thread(target=_do_dispatch, daemon=True).start()
     log.info(f'🚀 {task_id} 推进后自动派发 → {agent_id}')
