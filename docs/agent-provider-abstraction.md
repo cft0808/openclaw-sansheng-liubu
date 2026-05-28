@@ -171,3 +171,20 @@ Provider failures should be explicit and recoverable. Edict may need clear rules
 ### Code modification boundaries
 
 Providers that can edit code, such as a future `ClaudeCodeProvider` or `CodexProvider`, should have strict workspace and branch boundaries. Edict should record the intended file scope, expose the resulting diff, and require an approval step before remote write operations.
+
+## 简体中文说明
+
+这份文档提出一个 `AgentProvider` 抽象层，用于讨论 Edict 未来如何在保持现有 OpenClaw 工作流不变的前提下，支持更多执行后端。
+
+核心思路是：Edict 继续负责三省六部的任务流转、角色分工、审议、派发、日志、审计和归档；具体执行后端则通过 provider 接口接入。这样可以减少编排层和执行层之间的耦合。
+
+可能的 provider 包括：
+
+- `OpenClawProvider`：封装当前 OpenClaw 执行路径。
+- `ShellProvider`：调用用户配置的本地脚本或命令，作为最小原型。
+- `CodexProvider`：用于探索 Codex 驱动的代码或仓库任务。
+- `ClaudeCodeProvider`：用于探索 Claude Code 驱动的本地开发任务。
+
+其中，`ClaudeCodeProvider` 或 `CodexProvider` 可以支持真实代码修改，但不应绕过 Edict 的审核门禁。推荐方式是在隔离 workspace、worktree 或贡献分支中执行，返回 patch、测试输出、失败说明和变更摘要，再由 Edict 或人工审核决定是否 commit、push 或 merge。
+
+这份提案不是要替换 OpenClaw，也不是要重写 UI 或立即实现所有 provider。它只是先把执行层边界抽象出来，方便后续在不破坏当前工作流的基础上，逐步探索 shell、Codex、Claude Code、CI 或下游个人工作流系统等集成方向。
