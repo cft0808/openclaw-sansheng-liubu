@@ -111,6 +111,12 @@ _AGENT_LABELS = {
     'gongbu': '工部', 'libu_hr': '吏部', 'zaochao': '钦天监',
 }
 
+_KNOWN_ORG_LABELS = {
+    '太子', '中书省', '门下省', '尚书省',
+    '礼部', '户部', '兵部', '刑部', '工部', '吏部',
+    '钦天监', '六部', '执行中', '完成', '阻塞',
+}
+
 MAX_PROGRESS_LOG = 100  # 单任务最大进展日志条数
 
 def load():
@@ -438,6 +444,7 @@ def cmd_state(task_id, new_state, now_text=None):
     """更新任务状态（原子操作，含流转合法性校验 + 高风险拦截）"""
     old_state = [None]
     rejected = [False]
+    reject_reason = ['非法状态转换']
     pending_confirm = [False]
     idempotent = [False]
     agent_id = _infer_agent_id_from_runtime()
@@ -451,6 +458,10 @@ def cmd_state(task_id, new_state, now_text=None):
             idempotent[0] = True
             if now_text:
                 t['now'] = now_text
+            if new_state in STATE_ORG_MAP:
+                t['org'] = STATE_ORG_MAP[new_state]
+            if new_state != 'PendingConfirm':
+                t.pop('pending_confirm', None)
             at = now_iso()
             t['updatedAt'] = at
             _touch_scheduler_progress(t, at, agent_id, reset_retry=False)
@@ -458,6 +469,11 @@ def cmd_state(task_id, new_state, now_text=None):
         allowed = _VALID_TRANSITIONS.get(old_state[0])
         if allowed is not None and new_state not in allowed:
             log.warning(f'⚠️ 非法状态转换 {task_id}: {old_state[0]} → {new_state}（允许: {allowed}）')
+            rejected[0] = True
+            return tasks
+        if old_state[0] == 'PendingConfirm':
+            reject_reason[0] = 'PendingConfirm 状态必须使用 confirm 命令确认或驳回'
+            log.warning(f'⚠️ {task_id} {reject_reason[0]}: {old_state[0]} → {new_state}')
             rejected[0] = True
             return tasks
         # 高风险操作拦截 → 进入 PendingConfirm
@@ -479,6 +495,8 @@ def cmd_state(task_id, new_state, now_text=None):
         t['state'] = new_state
         if new_state in STATE_ORG_MAP:
             t['org'] = STATE_ORG_MAP[new_state]
+        if new_state != 'PendingConfirm':
+            t.pop('pending_confirm', None)
         if now_text:
             t['now'] = now_text
         at = now_iso()
@@ -490,11 +508,11 @@ def cmd_state(task_id, new_state, now_text=None):
     if rejected[0]:
         log.info(f'❌ {task_id} 状态转换被拒: {old_state[0]} → {new_state}')
         agent_id = _infer_agent_id_from_runtime()
-        _append_audit(task_id, agent_id, 'state_rejected', old_state[0], new_state, '非法状态转换')
+        _append_audit(task_id, agent_id, 'state_rejected', old_state[0], new_state, reject_reason[0])
         _append_runtime_event('state_rejected', task_id, agent_id, {
             'oldState': old_state[0],
             'newState': new_state,
-            'reason': '非法状态转换',
+            'reason': reject_reason[0],
         }, confidence='high')
     elif idempotent[0]:
         log.info(f'ℹ️ {task_id} 状态已是 {new_state}，按心跳处理')
@@ -546,8 +564,9 @@ def cmd_flow(task_id, from_dept, to_dept, remark):
             "at": at, "from": from_dept, "to": to_dept, "remark": clean_remark,
             "agent": agent_id, "agentLabel": agent_label,
         })
-        # 同步更新 org，使看板能正确显示当前所属部门
-        t['org'] = to_dept
+        # 只在目标是合法部门/组织时同步 org，避免 "✅ Done" 这类展示文本污染所属部门。
+        if to_dept in _KNOWN_ORG_LABELS:
+            t['org'] = to_dept
         t['updatedAt'] = now_iso()
         _touch_scheduler_progress(t, t['updatedAt'], agent_id, reset_retry=not start_only)
         return tasks

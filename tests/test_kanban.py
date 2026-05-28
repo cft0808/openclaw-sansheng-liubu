@@ -46,6 +46,31 @@ def test_move_state(tmp_path):
         kb.TASKS_FILE = original
 
 
+def test_state_update_does_not_reload_file_again(tmp_path, monkeypatch):
+    """State updates should not re-read/re-save the same file after atomic mutation."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {"id": "T-1A", "title": "perf", "state": "Inbox"}
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    popen_calls = []
+
+    def fail_on_reload(*_args, **_kwargs):
+        raise AssertionError("unexpected reload")
+
+    monkeypatch.setattr(kb.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+    monkeypatch.setattr(kb, "atomic_json_read", fail_on_reload)
+    try:
+        kb.cmd_state("T-1A", "Doing")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["state"] == "Doing"
+        assert len(popen_calls) <= 1
+    finally:
+        kb.TASKS_FILE = original
+
+
 def test_idempotent_state_is_heartbeat_without_resetting_retries(tmp_path):
     """Repeated state updates should not be rejected or hide execution stalls."""
     tasks_file = tmp_path / "tasks_source.json"
@@ -132,6 +157,80 @@ def test_start_execution_flow_does_not_reset_retry_counter(tmp_path):
         assert task["_scheduler"]["retryCount"] == 1
         assert task["_scheduler"]["escalationLevel"] == 0
         assert task["_scheduler"]["lastProgressAt"]
+    finally:
+        kb.TASKS_FILE = original
+
+
+def test_flow_to_display_label_does_not_overwrite_org(tmp_path):
+    """Display-only flow targets should not corrupt the task owner."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-3C",
+            "title": "flow label test",
+            "state": "PendingConfirm",
+            "org": "尚书省",
+            "flow_log": [],
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_flow("T-3C", "尚书省", "✅ Done", "尚书省审核完成")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["org"] == "尚书省"
+        assert task["flow_log"][0]["to"] == "✅ Done"
+    finally:
+        kb.TASKS_FILE = original
+
+
+def test_done_heartbeat_clears_stale_pending_confirm(tmp_path):
+    """A stale confirmation marker should not remain on an already done task."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-3D",
+            "title": "stale confirm cleanup",
+            "state": "Done",
+            "org": "Done",
+            "pending_confirm": {"target_state": "Done"},
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_state("T-3D", "Done", "已完成")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["state"] == "Done"
+        assert task["org"] == "完成"
+        assert "pending_confirm" not in task
+    finally:
+        kb.TASKS_FILE = original
+
+
+def test_pending_confirm_requires_confirm_command(tmp_path):
+    """Agents must not bypass confirmation by calling state directly."""
+    tasks_file = tmp_path / "tasks_source.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T-3E",
+            "title": "confirm gate",
+            "state": "PendingConfirm",
+            "org": "尚书省",
+            "pending_confirm": {"target_state": "Done"},
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    original = kb.TASKS_FILE
+    kb.TASKS_FILE = tasks_file
+    try:
+        kb.cmd_state("T-3E", "Done", "试图绕过确认")
+        task = json.loads(tasks_file.read_text(encoding="utf-8"))[0]
+        assert task["state"] == "PendingConfirm"
+        assert task["org"] == "尚书省"
+        assert task["pending_confirm"]["target_state"] == "Done"
     finally:
         kb.TASKS_FILE = original
 
